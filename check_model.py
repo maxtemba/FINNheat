@@ -35,9 +35,17 @@ if not os.path.exists(MODEL_PATH):
     print("Please run 'train.py' first.")
     exit()
 
-model = FINNCompatibleGHM_MultiOutput()
-model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+model = FINNCompatibleGHM_MultiOutput(   # or whatever name you used
+    in_channels=4,
+    num_angles=6,
+    num_reg=2,
+)
 model.eval()
+
+# For FINN-compatibility test: DO NOT load the old checkpoint
+# state = torch.load(MODEL_PATH, map_location="cpu")
+# model.load_state_dict(state)
+
 
 dummy_input = torch.randn(1, 4, 360, 640)
 
