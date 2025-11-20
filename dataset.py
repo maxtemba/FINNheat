@@ -17,8 +17,8 @@ except ImportError:
 class GraspNetHeatmapDataset(Dataset):
     """
     PyTorch Dataset for GraspNet that:
-      - loads RGB-D + projected 2D grasps from .npz
-      - uses HeatmapGenerator to build ground-truth heatmaps on-the-fly
+      - Loads RGB-D images and projected 2D grasps from .npz files.
+      - Uses HeatmapGenerator (HGGD logic) to build 5 ground-truth tensors on-the-fly.
     """
     def __init__(self, graspnet_root, camera='kinect', downsample_factor=8):
         self.graspnet_root = graspnet_root
@@ -28,14 +28,18 @@ class GraspNetHeatmapDataset(Dataset):
         self.image_dir_base = os.path.join(graspnet_root, "scenes")
         self.label_dir_base = os.path.join(graspnet_root, f"dataset_{camera}")
 
-        # Target image size (H, W)
+        # Target image size (H, W) - Must match model input
         self.image_hw = (360, 640)
         self.grid_size = downsample_factor
 
-        # Heatmap generator (implements Gaussian + grid strategy)
+        # Initialize the HGGD-compliant Heatmap Generator
         self.generator = HeatmapGenerator(
             full_hw=self.image_hw,
-            grid_size=self.grid_size
+            grid_size=self.grid_size,
+            num_angles=6,   # Default HGGD anchor count
+            anchor_w=50.0,  # Default HGGD reference width
+            anchor_z=20.0,  # Default HGGD reference depth
+            sigma=10        # Fixed sigma for confidence map
         )
 
         # Build list of all (rgb, depth, label) triplets
@@ -90,18 +94,14 @@ class GraspNetHeatmapDataset(Dataset):
     def __getitem__(self, idx):
         rgb_path, depth_path, label_path = self.file_list[idx]
 
-        # Load RGB-D image (original resolution)
+        # --- 1. Load Images ---
         rgb = np.array(Image.open(rgb_path)) / 255.0
-        depth = np.array(Image.open(depth_path)) / 1000.0
+        depth = np.array(Image.open(depth_path)) / 1000.0 # Convert mm to meters
         depth = np.expand_dims(depth, axis=-1)
 
         orig_h, orig_w = rgb.shape[:2]
 
-        # Scale factors original -> target (360x640)
-        scale_y = self.image_hw[0] / orig_h
-        scale_x = self.image_hw[1] / orig_w
-
-        # Resize to target size if needed
+        # --- 2. Resize Images (if needed) ---
         if orig_h != self.image_hw[0] or orig_w != self.image_hw[1]:
             rgb = np.array(
                 Image.fromarray((rgb * 255).astype(np.uint8))
@@ -113,10 +113,11 @@ class GraspNetHeatmapDataset(Dataset):
             ) / 1000.0
             depth = np.expand_dims(depth, axis=-1)
 
+        # Combine RGB and Depth -> [4, H, W]
         rgbd = np.concatenate([rgb, depth], axis=-1)
-        x_image = torch.from_numpy(rgbd).permute(2, 0, 1).float()  # [4,H,W]
+        x_image = torch.from_numpy(rgbd).permute(2, 0, 1).float()
 
-        # Load projected grasps from .npz
+        # --- 3. Load and Scale Labels ---
         try:
             npz_data = np.load(label_path)
 
@@ -125,153 +126,104 @@ class GraspNetHeatmapDataset(Dataset):
             widths  = npz_data['widths_2d'].astype(np.float32)    # (N,)
             depths_z  = npz_data['center_z_depths'].astype(np.float32)  # (N,)
 
-            # Rescale centers and widths to 360x640 if needed
+            # Scale factors original -> target (e.g. 720 -> 360)
+            scale_y = self.image_hw[0] / orig_h
+            scale_x = self.image_hw[1] / orig_w
+
+            # Resize label coordinates if image was resized
             if orig_h != self.image_hw[0] or orig_w != self.image_hw[1]:
                 centers[:, 0] *= scale_x
                 centers[:, 1] *= scale_y
                 widths *= scale_x
 
-            # Convert depths to meters
-            depths = depths_z / 1000.0
+            # Depth Target: delta = grasp_z - scene_depth
+            # We need the scene depth at the grasp center to compute the delta.
+            # Because doing this lookup for thousands of grasps is slow in Python,
+            # HGGD often pre-calculates it or approximates.
+            # Ideally: delta = depths_z/1000.0 - scene_depth_at_center
+            # Here we pass the raw depth (converted to meters) and let the generator handle normalization.
+            grasp_depths_m = depths_z / 1000.0
 
+            # Calculate Depth Delta (Grasp Depth - Scene Depth at center)
+            # Fast approximation: sample the resized depth map we just loaded
+            center_uv_int = centers.astype(int)
+            # Clip to bounds
+            np.clip(center_uv_int[:, 0], 0, self.image_hw[1]-1, out=center_uv_int[:, 0])
+            np.clip(center_uv_int[:, 1], 0, self.image_hw[0]-1, out=center_uv_int[:, 1])
+
+            scene_depths_at_center = depth[center_uv_int[:, 1], center_uv_int[:, 0], 0]
+            depth_deltas = grasp_depths_m - scene_depths_at_center
+
+            # Pack into (N, 5) array: [u, v, theta, width, depth_delta]
             projected_grasps = np.hstack([
                 centers,
                 thetas[:, np.newaxis],
                 widths[:, np.newaxis],
-                depths[:, np.newaxis]
+                depth_deltas[:, np.newaxis]
             ])
 
         except Exception:
             projected_grasps = np.zeros((0, 5), dtype=np.float32)
 
-        # Generate ground-truth heatmaps
-        gt_conf, gt_theta, gt_reg = self.generator.generate_ground_truth(
-            grasps_raw=projected_grasps,
-            camera_intrinsics=None
-        )
+        # --- 4. Generate Ground Truth (5 Tensors) ---
+        # gt_loc: [1, H, W] (Full Res)
+        # gt_cls, gt_theta, gt_width, gt_depth: [K, H/r, W/r] (Grid Res)
+        gt_loc, gt_cls, gt_theta, gt_width, gt_depth = \
+            self.generator.generate_ground_truth(projected_grasps)
 
-        # Downsample confidence to grid resolution
-        gt_conf_downsampled = F.avg_pool2d(
-            gt_conf,
+        # --- 5. Downsample Location Map ---
+        # The network outputs loc_map at grid resolution (H/8, W/8), so we must downsample the GT.
+        # Use AvgPool to preserve the gaussian peaks (Max pool might be too aggressive for soft targets)
+        # or MaxPool if strictly following CornerNet style. HGGD uses draw_gaussian on a downsampled grid in some versions,
+        # but since we drew it at full res, AvgPool is a safe way to alias it down.
+        gt_loc_downsampled = F.avg_pool2d(
+            gt_loc,
             kernel_size=self.grid_size,
             stride=self.grid_size
         )
 
-        y_conf_low_res = gt_conf_downsampled  # [1, H/r, W/r]
-        y_theta_low_res = gt_theta            # [6, H/r, W/r]
-        y_reg_low_res = gt_reg               # [2, H/r, W/r]
+        return x_image, (gt_loc_downsampled, gt_cls, gt_theta, gt_width, gt_depth)
 
-        return x_image, (y_conf_low_res, y_theta_low_res, y_reg_low_res)
 
+# ==============================================================================
+# HELPER FUNCTIONS (For debugging / Visualization)
+# ==============================================================================
 
 def draw_grasps_on_image(ax, projected_grasps, h, w):
-    """Draw projected grasps [u, v, theta, width, depth] on top of an image."""
-    for u, v, theta, width, depth_offset in projected_grasps:
-        ax.plot(u, v, 'g.')
+    """Draw projected grasps on top of an image."""
+    for u, v, theta, width, depth_delta in projected_grasps:
+        ax.plot(u, v, 'g.', markersize=3)
         half_w = width / 2.0
         dx = half_w * np.cos(theta)
         dy = half_w * np.sin(theta)
         p1_u, p1_v = u - dx, v - dy
         p2_u, p2_v = u + dx, v + dy
-        ax.plot([p1_u, p2_u], [p1_v, p2_v], 'r-', linewidth=2)
+        ax.plot([p1_u, p2_u], [p1_v, p2_v], 'r-', linewidth=1)
 
     ax.set_xlim(0, w)
     ax.set_ylim(h, 0)
     ax.axis('off')
 
 
-def visualize_one_sample(dataset, idx=0, save_path="graspnet_sample_debug.png"):
-    """Load one sample from the dataset and save a 2x2 debug figure."""
-    if not MATPLOTLIB_AVAILABLE:
-        print("matplotlib not available; cannot visualize.")
-        return
-
-    rgb_path, depth_path, label_path = dataset.file_list[idx]
-
-    # Load RGB for display (resized same as in __getitem__)
-    rgb = np.array(Image.open(rgb_path)) / 255.0
-    H, W = dataset.image_hw
-    if rgb.shape[0] != H or rgb.shape[1] != W:
-        rgb = np.array(
-            Image.fromarray((rgb * 255).astype(np.uint8))
-            .resize((W, H))
-        ) / 255.0
-
-    # Load grasps and rescale same way
-    npz_data = np.load(label_path)
-    centers = npz_data['centers_2d'].astype(np.float32)
-    thetas  = npz_data['thetas_rad'].astype(np.float32)
-    widths  = npz_data['widths_2d'].astype(np.float32)
-    depths_z  = npz_data['center_z_depths'].astype(np.float32)
-
-    orig_h, orig_w = np.array(Image.open(rgb_path)).shape[:2]
-    scale_y = H / orig_h
-    scale_x = W / orig_w
-    if orig_h != H or orig_w != W:
-        centers[:, 0] *= scale_x
-        centers[:, 1] *= scale_y
-        widths *= scale_x
-    depths = depths_z / 1000.0
-
-    projected_grasps = np.hstack([
-        centers,
-        thetas[:, np.newaxis],
-        widths[:, np.newaxis],
-        depths[:, np.newaxis]
-    ]).astype(np.float32)
-
-    gt_conf, gt_theta, gt_reg = dataset.generator.generate_ground_truth(
-        grasps_raw=projected_grasps,
-        camera_intrinsics=None
-    )
-
-    conf_map_np = gt_conf.squeeze().numpy()
-    theta_map_np = torch.argmax(gt_theta, dim=0).squeeze().numpy()
-    width_map_np = gt_reg[0].numpy()
-
-    fig, ax = plt.subplots(2, 2, figsize=(16, 9))
-    fig.suptitle("Random GraspNet Sample - Data Generation Check", fontsize=16)
-
-    ax[0, 0].imshow(rgb)
-    draw_grasps_on_image(ax[0, 0], projected_grasps, H, W)
-    ax[0, 0].set_title("RGB + Real Projected Grasps")
-
-    im_conf = ax[0, 1].imshow(conf_map_np, cmap='hot', vmin=0, vmax=1)
-    ax[0, 1].set_title("Confidence Heatmap Qc (Full Res)")
-    ax[0, 1].axis('off')
-    fig.colorbar(im_conf, ax=ax[0, 1], fraction=0.046, pad=0.04)
-
-    im_theta = ax[1, 0].imshow(
-        theta_map_np, cmap='viridis',
-        vmin=0, vmax=dataset.generator.num_angles - 1
-    )
-    ax[1, 0].set_title("Theta Heatmap Qθ (Grid)")
-    ax[1, 0].axis('off')
-    fig.colorbar(im_theta, ax=ax[1, 0], fraction=0.046, pad=0.04)
-
-    im_width = ax[1, 1].imshow(width_map_np, cmap='viridis')
-    ax[1, 1].set_title("Width Heatmap Qw (Grid)")
-    ax[1, 1].axis('off')
-    fig.colorbar(im_width, ax=ax[1, 1], fraction=0.046, pad=0.04)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(save_path, dpi=150)
-    print(f"Saved debug visualization to {save_path}")
-
-
 if __name__ == "__main__":
+    # Quick test block
     GRASPNET_ROOT = "data/graspnet"
-
     dataset = GraspNetHeatmapDataset(
         graspnet_root=GRASPNET_ROOT,
         camera="kinect",
         downsample_factor=8
     )
 
-    if len(dataset) == 0:
-        print("No samples found; check GRASPNET_ROOT and camera.")
+    if len(dataset) > 0:
+        img, targets = dataset[0]
+        gt_loc, gt_cls, gt_theta, gt_width, gt_depth = targets
+
+        print("Dataset Test Successful:")
+        print(f"  Image Shape: {img.shape}")
+        print(f"  Loc Map:   {gt_loc.shape}")
+        print(f"  Cls Map:   {gt_cls.shape}")
+        print(f"  Theta Map: {gt_theta.shape}")
+        print(f"  Width Map: {gt_width.shape}")
+        print(f"  Depth Map: {gt_depth.shape}")
     else:
-        test_idx = 0
-        _ = dataset[test_idx]
-        visualize_one_sample(dataset, idx=test_idx,
-                             save_path="graspnet_sample_debug.png")
+        print("No data found. Check paths.")

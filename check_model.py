@@ -72,7 +72,8 @@ def get_largest_divisor(number, limit):
 # ==============================================================================
 print("--- 1. Exporting Model ---")
 
-raw_model = FINNCompatibleGHM_MultiOutput(in_channels=4, num_angles=6, num_reg=2)
+# Removed 'num_reg=2' because width/depth are now separate heads
+raw_model = FINNCompatibleGHM_MultiOutput(in_channels=4, num_angles=6)
 model = FinnInputWrapper(raw_model)
 model.eval()
 

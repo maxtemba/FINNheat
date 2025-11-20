@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import brevitas.nn as qnn
-# ADDED: Int8ActPerTensorFloat for the input quantization
 from brevitas.quant import Int8WeightPerTensorFloat, Uint8ActPerTensorFloat, Int8ActPerTensorFloat
 
 class QuantConvBlock(nn.Module):
@@ -16,9 +15,7 @@ class QuantConvBlock(nn.Module):
         self.bn = nn.BatchNorm2d(out_channels)
         self.relu = qnn.QuantReLU(
             act_quant=Uint8ActPerTensorFloat,
-            return_quant_tensor=False # Keep as False for intermediate blocks if you prefer,
-            # but strictly typically internal layers pass QuantTensors.
-            # For this specific fix, the Input is the priority.
+            return_quant_tensor=False
         )
 
     def forward(self, x):
@@ -29,21 +26,21 @@ class QuantConvBlock(nn.Module):
 
 
 class FINNCompatibleGHM_MultiOutput(nn.Module):
-    def __init__(self, in_channels=4, num_angles=6, num_reg=2):
+    def __init__(self, in_channels=4, num_angles=6):
         super().__init__()
 
         # ======================================================================
-        # 1. THE FIX: Explicit Input Quantization
+        # 1. INPUT QUANTIZATION (Crucial for FINN)
         # ======================================================================
-        # This node tells FINN: "Accept Float32 from CPU, convert to Int8,
-        # and stream it into the FPGA."
         self.quant_input = qnn.QuantIdentity(
             bit_width=8,
-            return_quant_tensor=True,  # Must be True to pass scale info to next layer
-            act_quant=Int8ActPerTensorFloat # Signed Int8 allows for normalized inputs (negatives)
+            return_quant_tensor=True,
+            act_quant=Int8ActPerTensorFloat
         )
-        # ======================================================================
 
+        # ======================================================================
+        # 2. BACKBONE (Encoder + Decoder)
+        # ======================================================================
         # Encoder: conv-only
         # Stage 1: H/2, W/2
         self.enc1 = nn.Sequential(
@@ -73,37 +70,54 @@ class FINNCompatibleGHM_MultiOutput(nn.Module):
             QuantConvBlock(64, 32)
         )
 
-        # Heads
-        self.head_confidence = qnn.QuantConv2d(
+        # ======================================================================
+        # 3. HGGD-COMPATIBLE HEADS (5 Outputs)
+        # ======================================================================
+        # 1. Location Map (Confidence) -> 1 Channel
+        self.head_loc = qnn.QuantConv2d(
             32, 1, kernel_size=1,
-            weight_quant=Int8WeightPerTensorFloat,
-            bias=False
+            weight_quant=Int8WeightPerTensorFloat, bias=True
         )
-        self.head_theta = qnn.QuantConv2d(
+
+        # 2. Classification Mask (Anchor Confidence) -> K Channels
+        self.head_cls = qnn.QuantConv2d(
             32, num_angles, kernel_size=1,
-            weight_quant=Int8WeightPerTensorFloat,
-            bias=False
+            weight_quant=Int8WeightPerTensorFloat, bias=True
         )
-        self.head_regression = qnn.QuantConv2d(
-            32, num_reg, kernel_size=1,
-            weight_quant=Int8WeightPerTensorFloat,
-            bias=False
+
+        # 3. Theta Offset Regression -> K Channels
+        self.head_theta_off = qnn.QuantConv2d(
+            32, num_angles, kernel_size=1,
+            weight_quant=Int8WeightPerTensorFloat, bias=True
+        )
+
+        # 4. Width Offset Regression -> K Channels
+        self.head_width_off = qnn.QuantConv2d(
+            32, num_angles, kernel_size=1,
+            weight_quant=Int8WeightPerTensorFloat, bias=True
+        )
+
+        # 5. Depth Offset Regression -> K Channels
+        self.head_depth_off = qnn.QuantConv2d(
+            32, num_angles, kernel_size=1,
+            weight_quant=Int8WeightPerTensorFloat, bias=True
         )
 
     def forward(self, x):
-        # ======================================================================
-        # 2. THE FIX: Apply Input Quantization First
-        # ======================================================================
+        # 1. Quantize Input
         x = self.quant_input(x)
-        # ======================================================================
 
+        # 2. Backbone
         x = self.enc1(x)   # -> H/2
         x = self.enc2(x)   # -> H/4
         x = self.enc3(x)   # -> H/8
         feat = self.decoder(self.bottleneck(x))
 
-        q_c_grid = self.head_confidence(feat)
-        q_theta = self.head_theta(feat)
-        q_reg = self.head_regression(feat)
+        # 3. Heads
+        loc_map = self.head_loc(feat)
+        cls_mask = self.head_cls(feat)
+        theta_off = self.head_theta_off(feat)
+        width_off = self.head_width_off(feat)
+        depth_off = self.head_depth_off(feat)
 
-        return q_c_grid, q_theta, q_reg
+        return loc_map, cls_mask, theta_off, width_off, depth_off

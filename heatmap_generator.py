@@ -1,223 +1,165 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
-try:
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-
 
 class HeatmapGenerator:
     """
-    Implements the heatmap generation logic from the HGGD paper.
-    - Gaussian encoding for the confidence map.
-    - Grid-based strategy for attribute maps.
+    HGGD-compliant Heatmap Generator.
+    Generates training targets compatible with AnchorGraspNet and your NAS model.
     """
-    def __init__(self, full_hw, grid_size, num_angles=6):
+    def __init__(self, full_hw, grid_size=8, num_angles=6,
+                 anchor_w=50.0, anchor_z=20.0, sigma=10):
         self.full_h, self.full_w = full_hw
         self.grid_size = grid_size
         self.grid_h = self.full_h // self.grid_size
         self.grid_w = self.full_w // self.grid_size
-        self.num_angles = num_angles
+        self.num_angles = num_angles # K=6
 
-        # Create anchor angles for classification
-        self.anchors = np.linspace(-np.pi/2, np.pi/2, num_angles + 1)[:-1]
+        # HGGD Hyperparameters
+        self.anchor_w = anchor_w   # Reference width (pixels)
+        self.anchor_z = anchor_z   # Reference depth (mm or meters, must match input scale)
+        self.sigma = sigma         # Gaussian radius for loc_map
 
-    def generate_ground_truth(self, grasps_raw, camera_intrinsics):
+        # Theta Anchors: [-pi/2, pi/2] split into K bins
+        self.theta_range = np.pi
+        self.anchor_step = self.theta_range / self.num_angles
+
+    def generate_ground_truth(self, grasps_raw):
         """
-        Main function to generate all ground-truth heatmaps from raw grasp data.
+        Generates 5 ground truth tensors from raw grasp data.
 
-        grasps_raw: (N, 5) array [u, v, theta, width, depth_offset]
+        Args:
+            grasps_raw: (N, 5) array [u, v, theta, width, depth_delta]
+
+        Returns:
+            tuple of 5 torch.Tensors:
+            - loc_map:      [1, H, W] (Full Resolution)
+            - cls_mask:     [K, H/r, W/r] (Grid Resolution)
+            - theta_offset: [K, H/r, W/r]
+            - width_offset: [K, H/r, W/r]
+            - depth_offset: [K, H/r, W/r]
         """
 
-        # 1. Initialize empty maps
-        gt_conf_map_full = np.zeros((self.full_h, self.full_w), dtype=np.float32)
+        # 1. Initialize Maps
+        # Location Map: [H, W] -> Will become [1, H, W]
+        loc_map = np.zeros((self.full_h, self.full_w), dtype=np.float32)
 
-        # Grid-based maps (H/r, W/r, C)
-        gt_theta_map = np.zeros((self.grid_h, self.grid_w, self.num_angles), dtype=np.float32)
-        gt_width_map = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
-        gt_depth_map = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
+        # Attribute Maps: [K, H/r, W/r]
+        shape_lr = (self.num_angles, self.grid_h, self.grid_w)
+        cls_mask_map = np.zeros(shape_lr, dtype=np.float32)
+        theta_offset_map = np.zeros(shape_lr, dtype=np.float32)
+        width_offset_map = np.zeros(shape_lr, dtype=np.float32)
+        depth_offset_map = np.zeros(shape_lr, dtype=np.float32)
 
-        # Counters for averaging
-        width_counters = np.zeros((self.grid_h, self.grid_w), dtype=np.int32)
-        depth_counters = np.zeros((self.grid_h, self.grid_w), dtype=np.int32)
+        if len(grasps_raw) == 0:
+            return self.format_outputs(loc_map, cls_mask_map, theta_offset_map, width_offset_map, depth_offset_map)
 
-        if grasps_raw.shape[0] == 0:
-            # No grasps in this view
-            return self.format_outputs(gt_conf_map_full, gt_theta_map, gt_width_map, gt_depth_map)
+        # 2. Gaussian Confidence Map (Full Resolution)
+        # HGGD uses a fixed sigma (default 10) defined in config.
+        centers_int = grasps_raw[:, :2].astype(np.int32)
+        for center in centers_int:
+            # Check bounds before drawing
+            if (0 <= center[0] < self.full_w) and (0 <= center[1] < self.full_h):
+                loc_map = self.draw_umich_gaussian(loc_map, center, self.sigma)
 
-        # --- Gaussian Encoding for Confidence Map (Full Res) ---
-        for u, v, theta, width, depth_offset in grasps_raw:
-            u, v = int(u), int(v)
-            if 0 <= u < self.full_w and 0 <= v < self.full_h:
-                # Use grasp width to determine sigma, as per paper
-                sigma = max(1.0, width / 10.0)
-                gt_conf_map_full = self.draw_gaussian(gt_conf_map_full, (u, v), sigma)
+        # 3. Anchor-based Attribute Maps (Grid Resolution)
+        # Loop through every grasp to populate the anchor grids
+        for u, v, theta, width, depth_delta in grasps_raw:
+            # Downsample coords to grid
+            u_grid = int(u // self.grid_size)
+            v_grid = int(v // self.grid_size)
 
-        # --- Grid-Based Strategy for Attributes (Low Res) ---
-        for u, v, theta, width, depth_offset in grasps_raw:
-            u_grid = int(u / self.grid_size)
-            v_grid = int(v / self.grid_size)
+            # Bounds Check
+            if not (0 <= u_grid < self.grid_w and 0 <= v_grid < self.grid_h):
+                continue
 
-            if 0 <= u_grid < self.grid_w and 0 <= v_grid < self.grid_h:
-                # 1. Theta Map (Angle Classification)
-                angle_diff = np.abs(self.anchors - theta)
-                angle_diff = np.minimum(angle_diff, np.pi - angle_diff) # Handle wrap-around
-                nearest_anchor_idx = np.argmin(angle_diff)
-                gt_theta_map[v_grid, u_grid, nearest_anchor_idx] = 1.0 # One-hot
+            # --- A. Theta Encoding (Anchor Binning) ---
+            # Clip to [-pi/2, pi/2] to avoid boundary errors
+            theta = np.clip(theta, -self.theta_range/2 + 1e-8, self.theta_range/2 - 1e-8)
 
-                # 2. Width Map (Average Regression)
-                gt_width_map[v_grid, u_grid] += width
-                width_counters[v_grid, u_grid] += 1
+            # Calculate which bin (anchor) this angle belongs to
+            # Formula: (theta + pi/2) / step_size
+            g_pos, delta_theta = divmod(theta + self.theta_range / 2, self.anchor_step)
+            g_pos = int(g_pos)
 
-                # 3. Depth Map (Average Regression)
-                gt_depth_map[v_grid, u_grid] += depth_offset
-                depth_counters[v_grid, u_grid] += 1
+            # Safety clamp for g_pos (rare edge cases)
+            g_pos = max(0, min(g_pos, self.num_angles - 1))
 
-        # Normalize the attribute maps
-        gt_width_map[width_counters > 0] /= width_counters[width_counters > 0]
-        gt_depth_map[depth_counters > 0] /= depth_counters[depth_counters > 0]
+            # Normalized Theta Offset [-0.5, 0.5]
+            # (angle_remainder / step_size) - 0.5
+            t_offset = delta_theta / self.anchor_step - 0.5
 
-        return self.format_outputs(gt_conf_map_full, gt_theta_map, gt_width_map, gt_depth_map)
+            # --- B. Width Encoding (Log Space) ---
+            # log(width / anchor_reference)
+            # Avoid log(0) or negative width
+            safe_width = max(width, 1e-6)
+            w_offset = np.log(safe_width / self.anchor_w)
 
-    def draw_gaussian(self, heatmap, center, sigma):
-        u, v = center
-        h, w = heatmap.shape
-        ys, xs = np.indices(heatmap.shape)
-        dist_sq = (ys - v) ** 2 + (xs - u) ** 2
-        g = np.exp(-dist_sq / (2 * sigma**2))
+            # --- C. Depth Encoding (Normalized) ---
+            # delta_z / (anchor_z * 2), clipped to [-0.5, 0.5]
+            # Note: anchor_z * 2 is the "range" covered by the anchor
+            d_offset = depth_delta / (self.anchor_z * 2)
+            d_offset = np.clip(d_offset, -0.5, 0.5)
 
-        # This is faster than looping
-        heatmap = np.maximum(heatmap, g)
+            # --- D. Accumulate ---
+            # Add values to the specific anchor channel at this grid location.
+            # Multiple grasps might map to the same bin; we sum them now and average later.
+            cls_mask_map[g_pos, v_grid, u_grid] += 1
+            theta_offset_map[g_pos, v_grid, u_grid] += t_offset
+            width_offset_map[g_pos, v_grid, u_grid] += w_offset
+            depth_offset_map[g_pos, v_grid, u_grid] += d_offset
+
+        # 4. Average the offsets
+        # If multiple grasps hit the same (u, v, anchor_idx), average their offsets.
+        count_map = cls_mask_map + (cls_mask_map == 0) # Add epsilon to avoid div by zero
+        theta_offset_map /= count_map
+        width_offset_map /= count_map
+        depth_offset_map /= count_map
+
+        # 5. Transform Classification Mask
+        # HGGD uses a specific sigmoid transform to map counts to soft labels:
+        # 0 count -> -1 score
+        # 1 count -> ~0.46 score
+        # High count -> 1.0 score
+        cls_mask_map = 2 / (1 + np.exp(-cls_mask_map)) - 1
+
+        return self.format_outputs(loc_map, cls_mask_map, theta_offset_map, width_offset_map, depth_offset_map)
+
+    def draw_umich_gaussian(self, heatmap, center, radius, k=1):
+        """
+        Draws a 2D Gaussian on the heatmap at the specified center.
+        Standard implementation used in CornerNet/CenterNet/HGGD.
+        """
+        diameter = 2 * radius + 1
+        gaussian = self.gaussian2D((diameter, diameter), sigma=diameter / 6)
+
+        x, y = int(center[0]), int(center[1])
+        height, width = heatmap.shape[0:2]
+
+        left, right = min(x, radius), min(width - x, radius + 1)
+        top, bottom = min(y, radius), min(height - y, radius + 1)
+
+        masked_heatmap = heatmap[y - top:y + bottom, x - left:x + right]
+        masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
+
+        if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
+            np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
         return heatmap
 
-    def format_outputs(self, conf_map, theta_map, width_map, depth_map):
-        # Convert to Tensors and correct shapes
+    def gaussian2D(self, shape, sigma=1):
+        m, n = [(ss - 1.) / 2. for ss in shape]
+        y, x = np.ogrid[-m:m + 1, -n:n + 1]
+        h = np.exp(-(x * x + y * y) / (2 * sigma * sigma))
+        h[h < np.finfo(h.dtype).eps * h.max()] = 0
+        return h
 
-        gt_conf = torch.from_numpy(conf_map).float().unsqueeze(0)        # [1, H, W]
-        gt_theta = torch.from_numpy(theta_map).permute(2, 0, 1).float() # [6, H/r, W/r]
-        gt_width = torch.from_numpy(width_map).float().unsqueeze(0)      # [1, H/r, W/r]
-        gt_depth = torch.from_numpy(depth_map).float().unsqueeze(0)      # [1, H/r, W/r]
-
-        gt_reg = torch.cat([gt_width, gt_depth], dim=0)                 # [2, H/r, W/r]
-
-        return gt_conf, gt_theta, gt_reg
-
-# ==============================================================================
-# === NEW TEST FUNCTION AND HELPER =============================================
-# ==============================================================================
-
-def draw_grasps_on_image(ax, grasps_raw, h, w):
-    """Plots the raw grasps on a matplotlib axis."""
-    for u, v, theta, width, depth_offset in grasps_raw:
-        # Grasp center
-        ax.plot(u, v, 'g.') # Green dot
-
-        # Calculate gripper points
-        half_w = width / 2.0
-        dx = half_w * np.cos(theta)
-        dy = half_w * np.sin(theta)
-
-        p1_u, p1_v = u - dx, v - dy
-        p2_u, p2_v = u + dx, v + dy
-
-        # Draw gripper line
-        ax.plot([p1_u, p2_u], [p1_v, p2_v], 'r-', linewidth=2) # Red line
-
-    ax.set_xlim(0, w)
-    ax.set_ylim(h, 0) # Inverted y-axis for images
-    ax.axis('off')
-
-
-def test_generator():
-    """
-    Runs a test of the HeatmapGenerator with random grasp data
-    and saves the output dashboard as an image.
-    """
-    print("--- Running HeatmapGenerator Test ---")
-
-    if not MATPLOTLIB_AVAILABLE:
-        print("\n⚠️  matplotlib not found. Cannot save test images.")
-        print("   Please run: pip install matplotlib")
-        return
-
-    # 1. Config
-    IMG_H, IMG_W = 360, 640
-    GRID_SIZE = 8
-    NUM_GRASPS = 10
-
-    # 2. Create Generator
-    generator = HeatmapGenerator(full_hw=(IMG_H, IMG_W), grid_size=GRID_SIZE)
-
-    # 3. Create Fake Grasp Data (N, 5)
-    # [u, v, theta, width, depth_offset]
-    us = np.random.randint(IMG_W * 0.1, IMG_W * 0.9, (NUM_GRASPS, 1)) # Keep grasps away from edge
-    vs = np.random.randint(IMG_H * 0.1, IMG_H * 0.9, (NUM_GRASPS, 1))
-    thetas = np.random.uniform(-np.pi/2, np.pi/2, (NUM_GRASPS, 1))
-    widths = np.random.uniform(20, 100, (NUM_GRASPS, 1))
-    depths = np.random.uniform(0.01, 0.1, (NUM_GRASPS, 1))
-
-    fake_grasps = np.hstack([us, vs, thetas, widths, depths]).astype(np.float32)
-    print(f"Generated {NUM_GRASPS} random grasps.")
-
-    # 4. Run Generator
-    gt_conf, gt_theta, gt_reg = generator.generate_ground_truth(fake_grasps, None)
-
-    print(f"Generator outputs:")
-    print(f"  Confidence Map (Full): {gt_conf.shape}")
-    print(f"  Theta Map (Grid):    {gt_theta.shape}")
-    print(f"  Regression Map (Grid): {gt_reg.shape}")
-
-    # 5. Create visualizations
-
-    # Create a blank white image
-    blank_image = np.ones((IMG_H, IMG_W, 3), dtype=np.float32)
-
-    # Squeeze batch/channel dim and move to numpy
-    conf_map_np = gt_conf.squeeze().numpy()
-
-    # Convert theta from one-hot to class index map
-    theta_map_np = torch.argmax(gt_theta, dim=0).squeeze().numpy()
-
-    # Get just the width map
-    width_map_np = gt_reg.squeeze(0)[0].numpy()
-
-    # 6. Create and Save the 2x2 Dashboard Plot
-    fig, ax = plt.subplots(2, 2, figsize=(16, 9))
-    fig.suptitle("HeatmapGenerator Test Dashboard", fontsize=16)
-
-    # --- Plot 1: Original Image + Grasps ---
-    ax[0, 0].imshow(blank_image)
-    draw_grasps_on_image(ax[0, 0], fake_grasps, IMG_H, IMG_W)
-    ax[0, 0].set_title("Original Image + Raw Grasps")
-
-    # --- Plot 2: Confidence Map ---
-    im_conf = ax[0, 1].imshow(conf_map_np, cmap='hot', vmin=0, vmax=1)
-    ax[0, 1].set_title("Generated Confidence Map (Full Res)")
-    ax[0, 1].axis('off')
-    fig.colorbar(im_conf, ax=ax[0, 1], fraction=0.046, pad=0.04)
-
-    # --- Plot 3: Theta Map ---
-    im_theta = ax[1, 0].imshow(theta_map_np, cmap='viridis', vmin=0, vmax=generator.num_angles - 1)
-    ax[1, 0].set_title("Generated Theta Map (Grid)")
-    ax[1, 0].axis('off')
-    fig.colorbar(im_theta, ax=ax[1, 0], fraction=0.046, pad=0.04)
-
-    # --- Plot 4: Width Map ---
-    im_width = ax[1, 1].imshow(width_map_np, cmap='viridis')
-    ax[1, 1].set_title("Generated Width Map (Grid)")
-    ax[1, 1].axis('off')
-    fig.colorbar(im_width, ax=ax[1, 1], fraction=0.046, pad=0.04)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig("test_generator_dashboard.png")
-
-    print("\n✅ Success! Saved test dashboard:")
-    print("  - test_generator_dashboard.png")
-    print("  (Check this image to see the outputs)")
-
-
-if __name__ == "__main__":
-    # This block runs when you call 'python heatmap_generator.py'
-    test_generator()
+    def format_outputs(self, loc, cls, theta, width, depth):
+        # Convert numpy arrays to PyTorch Tensors
+        # loc: [1, H, W]
+        # others: [K, H/r, W/r]
+        return (
+            torch.from_numpy(loc).float().unsqueeze(0),
+            torch.from_numpy(cls).float(),
+            torch.from_numpy(theta).float(),
+            torch.from_numpy(width).float(),
+            torch.from_numpy(depth).float()
+        )
