@@ -12,7 +12,7 @@ GRASPNET_ROOT = "data/graspnet" # This path should be correct now
 CAMERA = 'kinect'
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
-EPOCHS = 5
+EPOCHS = 1
 DOWNSAMPLE_FACTOR = 8
 SAVE_PATH = "trained_model.pth"
 # -------------------------

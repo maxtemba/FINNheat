@@ -23,7 +23,7 @@ def evaluate():
 
     if not os.path.exists(MODEL_PATH):
         print(f"ERROR: Model file not found at {MODEL_PATH}")
-        print("Please run 'train.py' first.")
+        print("Please run 'train_cpu.py' first.")
         return
 
     # 1. Load Model

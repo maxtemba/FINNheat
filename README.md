@@ -127,7 +127,7 @@ Create the following six Python files in your project directory.
 1.  **Train the Model:**
 
     ```bash
-    python train.py
+    python train_cpu.py
     ```
 
     Wait for the training to complete and for `trained_model.pth` to be created.

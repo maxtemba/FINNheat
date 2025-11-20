@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import brevitas.nn as qnn
-from brevitas.quant import Int8WeightPerTensorFloat, Uint8ActPerTensorFloat
-
+# ADDED: Int8ActPerTensorFloat for the input quantization
+from brevitas.quant import Int8WeightPerTensorFloat, Uint8ActPerTensorFloat, Int8ActPerTensorFloat
 
 class QuantConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel=3, padding=1, stride=1):
@@ -16,7 +16,9 @@ class QuantConvBlock(nn.Module):
         self.bn = nn.BatchNorm2d(out_channels)
         self.relu = qnn.QuantReLU(
             act_quant=Uint8ActPerTensorFloat,
-            return_quant_tensor=False
+            return_quant_tensor=False # Keep as False for intermediate blocks if you prefer,
+            # but strictly typically internal layers pass QuantTensors.
+            # For this specific fix, the Input is the priority.
         )
 
     def forward(self, x):
@@ -27,17 +29,22 @@ class QuantConvBlock(nn.Module):
 
 
 class FINNCompatibleGHM_MultiOutput(nn.Module):
-    """
-    FINN-compatible, GHM-like:
-
-    - 3 downsampling stages -> stride 8
-    - shared feature at H/8 x W/8
-    - 3 heads: Q_c_grid, Q_theta, Q_reg (w,d)
-    """
     def __init__(self, in_channels=4, num_angles=6, num_reg=2):
         super().__init__()
 
-        # Encoder: conv-only, no residual adds
+        # ======================================================================
+        # 1. THE FIX: Explicit Input Quantization
+        # ======================================================================
+        # This node tells FINN: "Accept Float32 from CPU, convert to Int8,
+        # and stream it into the FPGA."
+        self.quant_input = qnn.QuantIdentity(
+            bit_width=8,
+            return_quant_tensor=True,  # Must be True to pass scale info to next layer
+            act_quant=Int8ActPerTensorFloat # Signed Int8 allows for normalized inputs (negatives)
+        )
+        # ======================================================================
+
+        # Encoder: conv-only
         # Stage 1: H/2, W/2
         self.enc1 = nn.Sequential(
             QuantConvBlock(in_channels, 32, stride=2),
@@ -56,7 +63,7 @@ class FINNCompatibleGHM_MultiOutput(nn.Module):
             QuantConvBlock(96, 96)
         )
 
-        # Bottleneck + small decoder at stride 8
+        # Bottleneck + small decoder
         self.bottleneck = nn.Sequential(
             QuantConvBlock(96, 128),
             QuantConvBlock(128, 96)
@@ -66,7 +73,7 @@ class FINNCompatibleGHM_MultiOutput(nn.Module):
             QuantConvBlock(64, 32)
         )
 
-        # Heads at grid resolution (H/8, W/8)
+        # Heads
         self.head_confidence = qnn.QuantConv2d(
             32, 1, kernel_size=1,
             weight_quant=Int8WeightPerTensorFloat,
@@ -84,11 +91,19 @@ class FINNCompatibleGHM_MultiOutput(nn.Module):
         )
 
     def forward(self, x):
+        # ======================================================================
+        # 2. THE FIX: Apply Input Quantization First
+        # ======================================================================
+        x = self.quant_input(x)
+        # ======================================================================
+
         x = self.enc1(x)   # -> H/2
         x = self.enc2(x)   # -> H/4
         x = self.enc3(x)   # -> H/8
         feat = self.decoder(self.bottleneck(x))
+
         q_c_grid = self.head_confidence(feat)
         q_theta = self.head_theta(feat)
         q_reg = self.head_regression(feat)
+
         return q_c_grid, q_theta, q_reg
