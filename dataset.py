@@ -172,11 +172,8 @@ class GraspNetHeatmapDataset(Dataset):
             self.generator.generate_ground_truth(projected_grasps)
 
         # --- 5. Downsample Location Map ---
-        # The network outputs loc_map at grid resolution (H/8, W/8), so we must downsample the GT.
-        # Use AvgPool to preserve the gaussian peaks (Max pool might be too aggressive for soft targets)
-        # or MaxPool if strictly following CornerNet style. HGGD uses draw_gaussian on a downsampled grid in some versions,
-        # but since we drew it at full res, AvgPool is a safe way to alias it down.
-        gt_loc_downsampled = F.avg_pool2d(
+        # FIX: Use MaxPool so peak remains 1.0. AvgPool dilutes the peak.
+        gt_loc_downsampled = F.max_pool2d(
             gt_loc,
             kernel_size=self.grid_size,
             stride=self.grid_size
@@ -225,5 +222,8 @@ if __name__ == "__main__":
         print(f"  Theta Map: {gt_theta.shape}")
         print(f"  Width Map: {gt_width.shape}")
         print(f"  Depth Map: {gt_depth.shape}")
+
+        # Verification of the fix
+        print(f"  Max Value in Loc Map: {gt_loc.max().item():.4f} (Should be 1.0)")
     else:
         print("No data found. Check paths.")
