@@ -1,110 +1,72 @@
-# FINN-Heat: Hardware-Aware NAS for Real-Time Grasping
+import torch
+import brevitas.onnx as bo
+import os
+import sys
+import ast
 
-FINN-Heat is a Neural Architecture Search (NAS) pipeline designed to discover efficient, quantized grasping models for Xilinx FPGAs (specifically the Kria KV260).
+# --- PATH SETUP ---
+# Go up one level from 'tests/' to find 'core'
+sys.path.append("..")
 
-Unlike standard approaches that compress a large model (like ResNet-50) after training, this project searches for the optimal architecture from scratch. It evolves a "genome" of layers, channels, and bit-widths (4-bit/8-bit) to maximize accuracy while minimizing hardware latency.
+from core.models import NAS_GHM_Model
 
-## Project Structure
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+# Paths (Relative to 'tests/' folder)
+GENOME_FILE = "best_genome.txt"
+WEIGHTS_FILE = "trained_model_hggd.pth"
+OUTPUT_ONNX = "nas_model_export.onnx"
 
-The project is organized into a core library, the main search engine, and testing scripts.
+# ==============================================================================
+# MAIN EXPORT SCRIPT
+# ==============================================================================
+def main():
+    print(f"🚀 Starting FINN/ONNX Export")
 
-```text
-.
-├── nas_search.py           # The Evolutionary Search Engine. Runs the genetic algorithm.
-├── dataset.py              # GraspNet data loader with on-the-fly target generation.
-├── heatmap_generator.py    # Logic for Gaussian peaks and anchor encoding (HGGD).
-├── core/
-│   ├── models.py           # The Search Space. Defines the Dynamic NAS Model.
-│   ├── hardware.py         # The Hardware Evaluator. Compiles to FINN HLS to estimate FPS/LUTs.
-│   └── training.py         # The Accuracy Evaluator. Unified training loop and Loss function.
-├── tests/
-│   ├── train_genome.py     # Fully trains a discovered architecture (from best_genome.txt).
-│   ├── verify_pred.py      # Runs inference on a single image to visualize predictions.
-│   ├── export.py           # Exports the trained model to QONNX for the final FPGA build.
-│   └── verify_gt.py        # Debug tool to check ground truth generation.
-└── data/                   # Symlink or directory containing GraspNet-1Billion data.
+    # 1. Load Genome
+    if not os.path.exists(GENOME_FILE):
+        print(f"❌ Error: Genome file not found at {GENOME_FILE}"); return
 
-```
+    with open(GENOME_FILE, "r") as f:
+        genome = ast.literal_eval(f.read().strip())
+    print(f"🧬 Genome Loaded: {genome}")
 
-## Prerequisites
+    # 2. Build Model
+    model = NAS_GHM_Model(genome)
 
-* **Python 3.10+**
-* **Brevitas:** For quantization-aware training.
-* **FINN-Base:** For the hardware build flow and ONNX export.
-* **Vivado/Vitis HLS:** Required only if running the hardware estimator locally.
+    # 3. Load Weights
+    if not os.path.exists(WEIGHTS_FILE):
+        print(f"❌ Error: Weights file not found at {WEIGHTS_FILE}"); return
 
-## The Workflow
+    # Load to CPU for export
+    state_dict = torch.load(WEIGHTS_FILE, map_location='cpu')
+    model.load_state_dict(state_dict)
+    model.eval()
+    print("⚖️  Weights Loaded Successfully")
 
-This pipeline follows a 4-step process: **Search → Train → Verify → Export**.
+    # 4. Prepare Dummy Input
+    # Shape: [1, 4, 360, 640] (Batch, Channels, Height, Width)
+    # Adjust resolution if your 'downsample_factor' was different!
+    dummy_input = torch.randn(1, 4, 360, 640)
 
-### 1. Run the Search (NAS)
+    # 5. Export to QONNX
+    # We use export_qonnx (not standard torch.onnx) because it preserves
+    # the quantization nodes required by FINN.
+    print(f"📦 Exporting to {OUTPUT_ONNX}...")
 
-Run the evolutionary algorithm to find the best architecture for your hardware constraints. This script spawns a population of random models, estimates their hardware performance (FPS) and accuracy (Loss), and evolves them over generations.
+    try:
+        bo.export_qonnx(
+            model,
+            input_t=dummy_input,
+            export_path=OUTPUT_ONNX
+        )
+        print(f"\n✅ SUCCESS! Model saved to: {os.path.abspath(OUTPUT_ONNX)}")
+        print("   You can now copy this .onnx file to your Linux machine.")
+        print("   Run the FINN Docker container and point the builder to this file.")
 
-```bash
-python nas_search.py
+    except Exception as e:
+        print(f"\n❌ Export Failed: {e}")
 
-```
-
-**Output:** Generates `best_nas_genome.txt`.
-
-### 2. Full Training
-
-Once the search identifies the best genome, train it fully on the dataset. This script reads the genome file to reconstruct the exact model architecture before training.
-
-```bash
-# Update GENOME_FILE path in the script if necessary
-python tests/train_genome.py
-
-```
-
-**Output:** Saves weights to `trained_model_hggd.pth`.
-
-### 3. Verify Predictions
-
-Visual validation is critical for grasping. Run this script to generate a visualization (Input RGB vs. Heatmap Predictions) for a random test image.
-
-```bash
-python tests/verify_pred.py
-
-```
-
-**Output:** Saves `prediction_nas_3000.png`.
-
-### 4. Export for FPGA
-
-To deploy the model, export it to the QONNX intermediate representation. This format preserves the quantization metadata required by the FINN compiler.
-
-```bash
-python tests/export.py
-
-```
-
-**Output:** Generates `nas_model_export.onnx`.
-
-## Core Components
-
-### The Search Space (`core/models.py`)
-
-Defines a `NAS_GHM_Model` constructed from `DynamicBlock` layers. The architecture is flexible, defined by a dictionary ("genome") that specifies:
-
-* **Encoders:** Number of stages, kernel sizes (3x3 vs 5x5), channel widths, and bit-widths per stage.
-* **Decoder:** Channel widths for upsampling.
-    * **Quantization:** Mixed-precision support (4-bit or 8-bit weights).
-
-### Hardware Estimator (`core/hardware.py`)
-
-A "Turbo-Mode" estimator that acts as a proxy for the full FINN compiler. For every candidate model in the search, it:
-
-1. Exports the model to ONNX.
-2. Runs FINN cleanup transformations (Tidy, Streamline).
-3. Calculates optimal folding factors (SIMD/PE) to saturate the FPGA.
-4. Reports estimated FPS, Latency, and Resource Usage (LUT/BRAM).
-
-### Heatmap Generator (`heatmap_generator.py`)
-
-Implements the specific logic from the HGGD (Heatmap-based Grasp Generation) paper. It converts raw 5-DoF grasp rectangles into 5 dense tensors:
-
-* **Location Map:** Gaussian confidence peaks.
-* **Class Map:** Anchor bin classification.
-* **Regression Maps:** Offsets for Angle, Width, and Depth.
+if __name__ == "__main__":
+    main()

@@ -1,130 +1,114 @@
-### `README.md`
-
-```markdown
-# 🦾 FINN-Heat: Real-Time Grasping on FPGA (Baseline)
-
-> **A proof-of-concept for running a linear, 8-bit quantized grasp detection model on Xilinx FPGAs.**
+Here is a clean, minimal, and structured README for your repository.
 
 ---
 
-![Ground Truth vs Prediction](https://github.com/user-attachments/assets/placeholder-for-your-image-link)
-*(Left: Ground Truth Target | Right: Actual Model Prediction from this repo)*
+# FINN-Heat: Hardware-Aware NAS for Real-Time Grasping
 
-## 🤔 The Problem
-Robotic grasping usually relies on massive, heavy neural networks (like ResNet-50 or U-Net) that require power-hungry GPUs.
+FINN-Heat is a Neural Architecture Search (NAS) pipeline designed to discover efficient, quantized grasping models for Xilinx FPGAs (specifically the Kria KV260).
 
-But if you want to run this on the **Edge**—specifically on a Xilinx FPGA (like the Kria KV260 or Pynq-Z1)—you hit a wall:
-* **Skip Connections** (ResNet/U-Net) are difficult to implement in hardware streams.
-* **Float32 Math** kills throughput and consumes too much logic.
-* **Standard Architectures** are often too large for on-chip memory (BRAM).
+Unlike standard approaches that compress a large model (like ResNet-50) after training, this project searches for the optimal architecture from scratch. It evolves a "genome" of layers, channels, and bit-widths (4-bit/8-bit) to maximize accuracy while minimizing hardware latency.
 
-## 💡 The Solution
-**FINN-Heat** is a custom pipeline designed to prove that complex grasping tasks *can* run on simple hardware.
+## Project Structure
 
-We built a **Linear, Quantized Fully-Convolutional Network (FCN)** that serves as a hardware-friendly baseline:
-1.  **Stream-Friendly:** No skip connections. Data flows in one direction (Input → Output).
-2.  **8-bit Quantized:** Built with `Brevitas` to train with integers from day one.
-3.  **Dense Prediction:** Outputs high-resolution heatmaps ($45 \times 80$) for accurate grasp positioning, matching the **HGGD Paper's** methodology.
+The project is organized into a core library, the main search engine, and testing scripts.
 
-> **Note:** This repository currently contains a single, manually designed model (`FINNCompatibleGHM_MultiOutput`). It serves as the valid **baseline** for future Neural Architecture Search (NAS) experiments.
-
-## ⚡ Key Features
-
-* **GHM Architecture:** A custom 5-head model that predicts **Confidence**, **Angle**, **Width**, and **Depth** simultaneously.
-* **FINN-Ready:** Designed specifically for the Xilinx FINN compiler (Linear topology, Int8 weights/activations).
-* **On-the-Fly Generation:** The `HeatmapGenerator` converts raw GraspNet labels into training targets in real-time—no massive pre-processing needed.
-* **Hardware Analyzer:** Includes `check_model.py` to estimate real FPS and resource usage on a KV260 or Pynq-Z1 board.
-
----
-
-## 📸 Visual Verification
-
-Does this simplified linear model actually learn? **Yes.**
-Below is a comparison from our validation script. The model successfully learns to ignore the table (background) and predicts specific grasp angles (colors) for the objects.
-
-| Ground Truth (Target) | Model Prediction (Raw Output) |
-| :---: | :---: |
-| <img src="gt_raw_3000.png" width="400"> | <img src="prediction_raw_3000.png" width="400"> |
-| *Clean Gaussian peaks derived from annotations* | *Dense predictions from our linear quantized model* |
-
----
-
-## 🛠️ How to Run It
-
-### 1. Setup Environment
-You need a machine with PyTorch and Brevitas installed.
-```bash
-# Create env
-python3.10 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install torch torchvision brevitas finn-plus matplotlib numpy onnx
+```text
+.
+├── nas_search.py           # The Evolutionary Search Engine. Runs the genetic algorithm.
+├── dataset.py              # GraspNet data loader with on-the-fly target generation.
+├── heatmap_generator.py    # Logic for Gaussian peaks and anchor encoding (HGGD).
+├── core/
+│   ├── models.py           # The Search Space. Defines the Dynamic NAS Model.
+│   ├── hardware.py         # The Hardware Evaluator. Compiles to FINN HLS to estimate FPS/LUTs.
+│   └── training.py         # The Accuracy Evaluator. Unified training loop and Loss function.
+├── tests/
+│   ├── train_genome.py     # Fully trains a discovered architecture (from best_genome.txt).
+│   ├── verify_pred.py      # Runs inference on a single image to visualize predictions.
+│   ├── export.py           # Exports the trained model to QONNX for the final FPGA build.
+│   └── verify_gt.py        # Debug tool to check ground truth generation.
+└── data/                   # Symlink or directory containing GraspNet-1Billion data.
 
 ```
 
-### 2. Prepare Data
+## Prerequisites
 
-Download the **GraspNet-1Billion** subset (or full set) and arrange it like this:
+* **Python 3.10+**
+* **Brevitas:** For quantization-aware training.
+* **FINN-Base:** For the hardware build flow and ONNX export.
+* **Vivado/Vitis HLS:** Required only if running the hardware estimator locally.
 
-```
-data/graspnet/
-├── scenes/             # RGB-D Images
-└── dataset_kinect/     # Raw Labels (.npz)
+## The Workflow
 
-```
+This pipeline follows a 4-step process: **Search → Train → Verify → Export**.
 
-### 3. Train the Baseline
+### 1. Run the Search (NAS)
 
-This trains the hard-coded linear model using the HGGD Loss function.
+Run the evolutionary algorithm to find the best architecture for your hardware constraints. This script spawns a population of random models, estimates their hardware performance (FPS) and accuracy (Loss), and evolves them over generations.
 
 ```bash
-python train_cpu.py
+python nas_search.py
 
 ```
 
-*Target Loss:* You should see the loss drop from `~60.0` to `~0.6` within 10-15 epochs.
+**Output:** Generates `best_nas_genome.txt`.
 
-### 4. Verify Predictions
+### 2. Full Training
 
-Visually check that the model is learning correctly (saves `prediction_raw_XXXX.png`).
+Once the search identifies the best genome, train it fully on the dataset. This script reads the genome file to reconstruct the exact model architecture before training.
+
+```bash
+# Update GENOME_FILE path in the script if necessary
+python tests/train_genome.py
+
+```
+
+**Output:** Saves weights to `trained_model_hggd.pth`.
+
+### 3. Verify Predictions
+
+Visual validation is critical for grasping. Run this script to generate a visualization (Input RGB vs. Heatmap Predictions) for a random test image.
 
 ```bash
 python tests/verify_pred.py
 
 ```
 
-### 5. Hardware Analysis
+**Output:** Saves `prediction_nas_3000.png`.
 
-Curious how fast this runs on a chip? Run the hardware checker.
+### 4. Export for FPGA
+
+To deploy the model, export it to the QONNX intermediate representation. This format preserves the quantization metadata required by the FINN compiler.
 
 ```bash
-python check_model.py
+python tests/export.py
 
 ```
 
-**Expected Output:**
+**Output:** Generates `nas_model_export.onnx`.
 
-> 🚀 FPS: ~32.15
-> 🐢 Bottleneck: 200MHz
+## Core Components
 
----
+### The Search Space (`core/models.py`)
 
-## 🔮 Future Work (NAS)
+Defines a `NAS_GHM_Model` constructed from `DynamicBlock` layers. The architecture is flexible, defined by a dictionary ("genome") that specifies:
 
-Currently, this repository uses a fixed architecture (`model.py`).
-The next phase of this project is to implement **Neural Architecture Search (NAS)** to automatically find models that are even faster or smaller than this baseline, optimizing specifically for the number of LUTs and DSPs available on the target FPGA.
+* **Encoders:** Number of stages, kernel sizes (3x3 vs 5x5), channel widths, and bit-widths per stage.
+* **Decoder:** Channel widths for upsampling.
+* **Quantization:** Mixed-precision support (4-bit or 8-bit weights).
 
-## 📝 Credits & References
+### Hardware Estimator (`core/hardware.py`)
 
-* **Original Concept:** "HGGD: A Heatmap-based Grasp Generation Method"
-* **Compiler:** Xilinx [FINN](https://github.com/Xilinx/finn) framework.
-* **Quantization:** AMD/Xilinx [Brevitas](https://github.com/Xilinx/brevitas).
+A "Turbo-Mode" estimator that acts as a proxy for the full FINN compiler. For every candidate model in the search, it:
 
----
+1. Exports the model to ONNX.
+2. Runs FINN cleanup transformations (Tidy, Streamline).
+3. Calculates optimal folding factors (SIMD/PE) to saturate the FPGA.
+4. Reports estimated FPS, Latency, and Resource Usage (LUT/BRAM).
 
-*Created by Max Temba as a Proof-of-Concept for efficient edge robotics.*
+### Heatmap Generator (`heatmap_generator.py`)
 
-```
+Implements the specific logic from the HGGD (Heatmap-based Grasp Generation) paper. It converts raw 5-DoF grasp rectangles into 5 dense tensors:
 
-```
+* **Location Map:** Gaussian confidence peaks.
+* **Class Map:** Anchor bin classification.
+* **Regression Maps:** Offsets for Angle, Width, and Depth.
