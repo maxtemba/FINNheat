@@ -1,149 +1,130 @@
-# FINN-Compatible Grasp Heatmap Model
+### `README.md`
 
-This project contains a complete, end-to-end pipeline for training and analyzing a FINN-compatible grasp heatmap detection model. It is designed to work with the GraspNet dataset and provides a full workflow from raw data to a hardware performance analysis for FPGA deployment.
+```markdown
+# 🦾 FINN-Heat: Real-Time Grasping on FPGA (Baseline)
 
-This repository is a proof-of-concept demonstrating how to:
+> **A proof-of-concept for running a linear, 8-bit quantized grasp detection model on Xilinx FPGAs.**
 
-1.  Handle the complex GraspNet dataset structure.
-2.  Generate grasp heatmaps on-the-fly, as described in the HGGD paper.
-3.  Design a quantized, linear (no skip-connection) FCN model that is compatible with the FINN builder.
-4.  Train the model on the 25,600-image dataset.
-5.  Visually evaluate the trained model's predictions.
-6.  Analyze the final model's hardware performance for real-time FPGA deployment.
+---
 
------
+![Ground Truth vs Prediction](https://github.com/user-attachments/assets/placeholder-for-your-image-link)
+*(Left: Ground Truth Target | Right: Actual Model Prediction from this repo)*
 
-## 🚀 Key Features
+## 🤔 The Problem
+Robotic grasping usually relies on massive, heavy neural networks (like ResNet-50 or U-Net) that require power-hungry GPUs.
 
-  * **FINN-Compatible Model:** A custom, linear FCN (`FINNCompatibleGHM_MultiOutput`) built with Brevitas for 8-bit quantization. It features three separate output heads to predict confidence, angle, and grasp attributes.
-  * **Advanced Data Pipeline:** `dataset.py` and `heatmap_generator.py` successfully navigate the complex, mismatched GraspNet dataset structure, parse raw `.npz` label files, and generate ground-truth heatmaps on-the-fly.
-  * **End-to-End Workflow:** Includes scripts to train the model (`train.py`), visually evaluate its predictions (`evaluate.py`), and analyze its hardware performance (`check_model.py`).
+But if you want to run this on the **Edge**—specifically on a Xilinx FPGA (like the Kria KV260 or Pynq-Z1)—you hit a wall:
+* **Skip Connections** (ResNet/U-Net) are difficult to implement in hardware streams.
+* **Float32 Math** kills throughput and consumes too much logic.
+* **Standard Architectures** are often too large for on-chip memory (BRAM).
 
------
+## 💡 The Solution
+**FINN-Heat** is a custom pipeline designed to prove that complex grasping tasks *can* run on simple hardware.
 
-## 📈 Performance Results
+We built a **Linear, Quantized Fully-Convolutional Network (FCN)** that serves as a hardware-friendly baseline:
+1.  **Stream-Friendly:** No skip connections. Data flows in one direction (Input → Output).
+2.  **8-bit Quantized:** Built with `Brevitas` to train with integers from day one.
+3.  **Dense Prediction:** Outputs high-resolution heatmaps ($45 \times 80$) for accurate grasp positioning, matching the **HGGD Paper's** methodology.
 
-The final trained model, when analyzed by the FINN builder (targeting a Pynq-Z1), achieves an estimated **32.15 FPS throughput**, proving its suitability for real-time applications.
+> **Note:** This repository currently contains a single, manually designed model (`FINNCompatibleGHM_MultiOutput`). It serves as the valid **baseline** for future Neural Architecture Search (NAS) experiments.
 
------
+## ⚡ Key Features
 
-## 🗺️ How to Replicate This Project
+* **GHM Architecture:** A custom 5-head model that predicts **Confidence**, **Angle**, **Width**, and **Depth** simultaneously.
+* **FINN-Ready:** Designed specifically for the Xilinx FINN compiler (Linear topology, Int8 weights/activations).
+* **On-the-Fly Generation:** The `HeatmapGenerator` converts raw GraspNet labels into training targets in real-time—no massive pre-processing needed.
+* **Hardware Analyzer:** Includes `check_model.py` to estimate real FPS and resource usage on a KV260 or Pynq-Z1 board.
 
-Here is the step-by-step recipe to replicate this project.
+---
 
-### Step 1: Environment Setup
+## 📸 Visual Verification
 
-#### 1\. Get the Data
+Does this simplified linear model actually learn? **Yes.**
+Below is a comparison from our validation script. The model successfully learns to ignore the table (background) and predicts specific grasp angles (colors) for the objects.
 
-  * **GraspNet Images:** Download the GraspNet "Train Images" (parts 1-4). Unzip them all into a single `graspnet/scenes/` folder.
-  * **GraspNet Labels:** Download the authors' preprocessed labels (`Kinect Dataset.7z` and/or `RealSense Dataset.7z`). Unzip them into their respective folders (e.g., `graspnet/dataset_kinect/`).
-  * **Verify Structure:** Your final data structure should look like this, with mismatched scene names and nested folders:
-    ```
-    graspnet/
-    ├── scenes/
-    │   └── scene_0000/
-    │       └── kinect/
-    │           ├── rgb/
-    │           │   └── 0000.png
-    │           └── depth/
-    │               └── 0000.png
-    └── dataset_kinect/
-        └── scene_0/
-            └── grasp_labels/
-                └── 0_view.npz
-    ```
+| Ground Truth (Target) | Model Prediction (Raw Output) |
+| :---: | :---: |
+| <img src="gt_raw_3000.png" width="400"> | <img src="prediction_raw_3000.png" width="400"> |
+| *Clean Gaussian peaks derived from annotations* | *Dense predictions from our linear quantized model* |
 
-#### 2\. Create Python Environment
+---
 
+## 🛠️ How to Run It
+
+### 1. Setup Environment
+You need a machine with PyTorch and Brevitas installed.
 ```bash
+# Create env
 python3.10 -m venv venv
 source venv/bin/activate
+
+# Install dependencies
+pip install torch torchvision brevitas finn-plus matplotlib numpy onnx
+
 ```
 
-#### 3\. Install All Libraries
+### 2. Prepare Data
+
+Download the **GraspNet-1Billion** subset (or full set) and arrange it like this:
+
+```
+data/graspnet/
+├── scenes/             # RGB-D Images
+└── dataset_kinect/     # Raw Labels (.npz)
+
+```
+
+### 3. Train the Baseline
+
+This trains the hard-coded linear model using the HGGD Loss function.
 
 ```bash
-pip install torch torchvision
-pip install brevitas onnx onnxruntime qonnx
-pip install finn-plus
-pip install matplotlib numpy
+python train_cpu.py
+
 ```
 
-#### 4\. (For macOS/Linux Users)
+*Target Loss:* You should see the loss drop from `~60.0` to `~0.6` within 10-15 epochs.
 
-If you are running analysis on a machine without the Xilinx tools installed, set this dummy environment variable to allow the reporting steps to run:
+### 4. Verify Predictions
+
+Visually check that the model is learning correctly (saves `prediction_raw_XXXX.png`).
 
 ```bash
-export XILINX_VIVADO="/not/installed"
+python tests/verify_pred.py
+
 ```
 
------
+### 5. Hardware Analysis
 
-### Step 2: Create Your Project Files
+Curious how fast this runs on a chip? Run the hardware checker.
 
-Create the following six Python files in your project directory.
+```bash
+python check_model.py
 
-  * **`model.py`**
+```
 
-      * Contains the `QuantConvBlock` class for a quantized Conv-BN-ReLU layer.
-      * Contains the `FINNCompatibleGHM_MultiOutput` class.
-      * **Crucial Logic:** The model is a linear FCN (no skip-connections) to make it compatible with the automated FINN builder. It has three separate output heads: `head_confidence`, `head_theta`, and `head_regression`.
+**Expected Output:**
 
-  * **`heatmap_generator.py`**
+> 🚀 FPS: ~32.15
+> 🐢 Bottleneck: 200MHz
 
-      * Contains the `HeatmapGenerator` class.
-      * **Crucial Logic:** The `generate_ground_truth` function implements the "Gaussian encoding" (for confidence) and "grid-based strategy" (for attributes) from the original paper.
+---
 
-  * **`dataset.py`**
+## 🔮 Future Work (NAS)
 
-      * Contains the `GraspNetHeatmapDataset` class.
-      * **Crucial Logic (File Paths):** Correctly navigates the mismatched paths (e.g., `scenes/scene_0000/kinect/rgb/0000.png` and `dataset_kinect/scene_0/grasp_labels/0_view.npz`).
-      * **Crucial Logic (Data Keys):** Loads the raw `.npz` file and builds the `(N, 5)` grasp array by stacking the `centers_2d`, `thetas_rad`, `widths_2d`, and `center_z_depths` arrays.
-      * **Crucial Logic (Outputs):** Returns three separate ground-truth tensors: `y_conf_low_res`, `y_theta_low_res`, and `y_reg_low_res`.
+Currently, this repository uses a fixed architecture (`model.py`).
+The next phase of this project is to implement **Neural Architecture Search (NAS)** to automatically find models that are even faster or smaller than this baseline, optimizing specifically for the number of LUTs and DSPs available on the target FPGA.
 
-  * **`train.py`**
+## 📝 Credits & References
 
-      * Loads the model and dataset for training.
-      * **Crucial Logic:** Implements the `combined_loss` function, which correctly calculates three separate losses (BCE for confidence, CrossEntropy for theta, and L1 for regression) for the three heads and adds them together.
-      * Saves the final `trained_model.pth`.
+* **Original Concept:** "HGGD: A Heatmap-based Grasp Generation Method"
+* **Compiler:** Xilinx [FINN](https://github.com/Xilinx/finn) framework.
+* **Quantization:** AMD/Xilinx [Brevitas](https://github.com/Xilinx/brevitas).
 
-  * **`evaluate.py`**
+---
 
-      * Loads the `trained_model.pth` and a single item from `GraspNetHeatmapDataset`.
-      * **Crucial Logic:** Re-loads the raw `.npz` data using the correct keys (just like `dataset.py`) to generate the full-resolution ground-truth for comparison.
-      * Saves the `prediction_dashboard.png` for visual checking.
+*Created by Max Temba as a Proof-of-Concept for efficient edge robotics.*
 
-  * **`check_model.py`**
+```
 
-      * Loads the final `trained_model.pth`.
-      * **Crucial Logic (Export):** Exports the trained model to `trained_heatmap_model.onnx` using `bo.export_qonnx`.
-      * **Crucial Logic (Analysis):** Configures `DataflowBuildConfig` with `target_fps = 100` to enable optimization (folding) in the FINN builder.
-      * **Crucial Logic (Error Handling):** Uses a `try...except` block to catch the expected `KeyError: 'FINN_RTLLIB'` on non-Xilinx systems, allowing the script to proceed and print the generated report.
-
------
-
-### Step 3: Run the Workflow
-
-1.  **Train the Model:**
-
-    ```bash
-    python train_cpu.py
-    ```
-
-    Wait for the training to complete and for `trained_model.pth` to be created.
-
-2.  **Visually Check the Model:**
-
-    ```bash
-    python evaluate.py
-    ```
-
-    Open the generated `prediction_dashboard.png` to confirm the model learned to predict grasp locations.
-
-3.  **Get FINN Performance:**
-
-    ```bash
-    python check_model.py
-    ```
-
-    Read the "ANALYTICAL PREDICTIONS" table from the console output to see the estimated FPS and latency.
+```
