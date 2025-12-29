@@ -1,94 +1,80 @@
 import sys
 import os
 import torch
-import numpy as np
 import matplotlib.pyplot as plt
-import ast
 
-# --- 1. Fix Imports ---
-# Go up to Project Root
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from core.models import NAS_GHM_Model  # <--- Use the New Model
+sys.path.append("..")
+# we import the shared helper instead of the raw model class
+from core.utils import load_nas_model
 from dataset import GraspNetHeatmapDataset
 
-# --- CONFIGURATION ---
+# --- config paths
+GENOME_FILE = "best_genome.txt"
+WEIGHTS_FILE = "trained_model_hggd.pth"
+GRASPNET_ROOT = "../data/graspnet"
+
+# --- settings
 IMG_INDEX = 3000
 CAMERA = 'kinect'
-# Paths relative to 'tests/' folder
-GRASPNET_ROOT = "../data/graspnet"
-MODEL_PATH = "trained_model_hggd.pth"
-GENOME_PATH = "best_genome.txt"      # <--- We need this now!
 OUTPUT_FILENAME = f"prediction_nas_{IMG_INDEX}.png"
 
-def verify_pred():
-    device = torch.device("cpu") # CPU is fine for single image inference
+def main():
+    print(f"starting prediction verification for image {IMG_INDEX}...")
 
-    print(f"📂 Loading Genome from {GENOME_PATH}...")
-    if not os.path.exists(GENOME_PATH):
-        print(f"❌ Error: {GENOME_PATH} not found."); return
+    # 1. build model and load weights uses logic from core/utils.py
+    try:
+        model = load_nas_model(GENOME_FILE, weights_path=WEIGHTS_FILE, device='cpu')
+        print("model built and weights loaded successfully.")
+    except Exception as e:
+        print(f"setup failed: {e}")
+        return
 
-    with open(GENOME_PATH, "r") as f:
-        genome = ast.literal_eval(f.read().strip())
-
-    print(f"🏗️ Building NAS Model...")
-    # 1. Initialize the correct architecture
-    model = NAS_GHM_Model(genome).to(device)
-
-    # 2. Load Weights
-    print(f"⚖️ Loading Weights from {MODEL_PATH}...")
-    if os.path.exists(MODEL_PATH):
-        try:
-            model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-        except Exception as e:
-            print(f"❌ Weight Mismatch: {e}")
-            print("   (Did you train this model using this exact genome file?)")
-            return
-    else:
-        print(f"❌ Model file not found."); return
-
-    model.eval()
-
-    # 3. Load Data
+    # 2. load data
+    if not os.path.exists(GRASPNET_ROOT):
+        print(f"data not found at {GRASPNET_ROOT}")
+        return
     try:
         ds = GraspNetHeatmapDataset(GRASPNET_ROOT, camera=CAMERA, downsample_factor=8)
     except Exception as e:
-        print(f"❌ Error loading dataset: {e}"); return
+        print(f"error loading dataset: {e}")
+        return
 
     if IMG_INDEX >= len(ds):
-        print(f"❌ Index {IMG_INDEX} out of range."); return
+        print(f"index {IMG_INDEX} out of range (dataset size: {len(ds)})")
+        return
 
-    print(f"🤖 Predicting Image {IMG_INDEX}...")
-
-    # 4. Inference
+    # 3. inference
+    print(f"running inference...")
     x_tensor, _ = ds[IMG_INDEX]
-    with torch.no_grad():
-        # Add batch dimension [1, 4, H, W]
-        p_loc, p_cls, p_theta, p_width, p_depth = model(x_tensor.unsqueeze(0).to(device))
 
-    # 5. Process Maps (RAW)
+    with torch.no_grad():
+        # add batch dimension [1, 4, H, W]
+        inputs = x_tensor.unsqueeze(0)
+        p_loc, p_cls, p_theta, p_width, p_depth = model(inputs)
+
+    # 4. process and plot
     rgb = x_tensor[:3].permute(1, 2, 0).numpy()
 
-    # Confidence (Sigmoid)
+    # confidence (sigmoid)
     pred_conf = torch.sigmoid(p_loc).squeeze().numpy()
 
-    # Anchor Class (Sigmoid -> Max across 6 anchors)
+    # anchor class (sigmoid -> max across 6 anchors)
     pred_anchor = torch.sigmoid(p_cls).squeeze().max(dim=0)[0].numpy()
 
-    # Regression Heads (Take 1st anchor for visualization)
+    # regression heads (take 1st anchor for visualization)
     pred_theta = p_theta.squeeze().numpy()[0]
     pred_width = p_width.squeeze().numpy()[0]
     pred_depth = p_depth.squeeze().numpy()[0]
 
-    # 6. Plot
+    # plot setup
     fig, axs = plt.subplots(2, 3, figsize=(15, 8), facecolor='white')
     fig.suptitle(f"NAS Model Prediction: Image {IMG_INDEX}", fontsize=16)
 
-    # Inputs
+    # inputs
     axs[0,0].imshow(rgb)
     axs[0,0].set_title("Input RGB")
 
-    # Heatmaps
+    # heatmaps
     im1 = axs[0,1].imshow(pred_conf, cmap='jet', vmin=0, vmax=1)
     axs[0,1].set_title("Pred Confidence")
     fig.colorbar(im1, ax=axs[0,1])
@@ -97,7 +83,7 @@ def verify_pred():
     axs[0,2].set_title("Pred Angle Class")
     fig.colorbar(im2, ax=axs[0,2])
 
-    # Regression
+    # regression
     im3 = axs[1,0].imshow(pred_theta, cmap='twilight')
     axs[1,0].set_title("Pred Theta Offset")
     fig.colorbar(im3, ax=axs[1,0])
@@ -113,9 +99,8 @@ def verify_pred():
     for ax in axs.flat: ax.axis('off')
     plt.tight_layout()
 
-    # --- SAVE ---
     plt.savefig(OUTPUT_FILENAME, dpi=150)
-    print(f"✅ Saved prediction to {OUTPUT_FILENAME}")
+    print(f"prediction saved to {OUTPUT_FILENAME}")
 
 if __name__ == "__main__":
-    verify_pred()
+    main()

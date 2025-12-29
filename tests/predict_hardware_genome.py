@@ -1,58 +1,41 @@
 import sys
 import os
 
-# --- PATH SETUP ---
-# Go up one level from 'tests/' to find 'core'
 sys.path.append("..")
-
-import torch
-from core.models import NAS_GHM_Model
 from core.hardware import estimate_performance
+from core.utils import load_nas_model
 
-# ==============================================================================
-# 1. DEFINE YOUR GENOME (Test Subject)
-# ==============================================================================
-my_genome = {
-    'enc_ch':    [32, 64, 64],
-    'enc_depth': [1, 1, 1],
-    'enc_k':     [3, 3, 3],
-    'enc_bits':  [8, 4, 4],
-    'btl_ch':    128,
-    'dec_ch':    [64, 32]
-}
+# --- config paths
+GENOME_FILE = "best_genome.txt"
 
-# ==============================================================================
-# 2. MAIN SCRIPT
-# ==============================================================================
 def main():
-    print(f"\n🧪 Testing Genome:\n{my_genome}\n")
+    print("starting hardware verification for the best genome...")
 
-    # 1. Build Model
+    # 1. build model and load weights uses logic from core/utils.py
+    # weights_path defaults to None, only the architecture structure is needed for estimation.
     try:
-        model = NAS_GHM_Model(my_genome)
-        print("✅ Model Built Successfully")
+        model = load_nas_model(GENOME_FILE, device='cpu')
+        print("model built successfully.")
     except Exception as e:
-        print(f"❌ Model Build Failed: {e}")
+        print(f"setup failed: {e}")
         return
 
-    # 2. Run Hardware Estimator
-    print("📊 Running FINN Hardware Estimator...")
+    # 2. run hardware estimator
+    print("running FINN estimator...")
 
-    # We use a unique build name to avoid overwriting other tests
-    metrics = estimate_performance(model, build_name="manual_test_genome")
+    metrics = estimate_performance(model, build_name="verify_best_genome")
 
     if metrics:
-        print("\n" + "="*40)
-        print("       HARDWARE RESULTS")
-        print("="*40)
-        print(f"🚀 FPS:      {metrics['fps']:.2f}")
-        print(f"🐢 Latency:  {metrics['latency']} cycles")
-        print(f"🧱 LUTs:     {metrics['lut']}")
-        print(f"💾 BRAMs:    {metrics['bram']}")
-        print(f"⚡ DSPs:     {metrics['dsp']}")
-        print("="*40)
+        print("\nHardware Estimation Results:")
+        print("----------------------------")
+        print(f"FPS:      {metrics['fps']:.2f}")
+        print(f"Latency:  {metrics['latency']} cycles")
+        print(f"LUTs:     {metrics['lut']}")
+        print(f"BRAMs:    {metrics['bram']}")
+        print(f"DSPs:     {metrics['dsp']}")
+        print("----------------------------")
     else:
-        print("\n❌ Estimation Failed (Check logs)")
+        print("estimation failed.")
         sys.exit(1)
 
 if __name__ == "__main__":

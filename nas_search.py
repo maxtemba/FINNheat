@@ -2,7 +2,6 @@ import torch
 import torch.optim as optim
 import random
 import copy
-import numpy as np
 import shutil
 import os
 from torch.utils.data import DataLoader, Subset

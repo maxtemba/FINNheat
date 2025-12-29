@@ -4,10 +4,10 @@ import brevitas.nn as qnn
 from brevitas.quant import Int8WeightPerTensorFloat, Uint8ActPerTensorFloat, Int8ActPerTensorFloat
 
 class DynamicBlock(nn.Module):
-    def __init__(self, in_c, out_c, k, s, bits):
+    def __init__(self, in_c, out_c, k, s, bits): # input chanel, output chanel, kernel, stride, bit width
         super().__init__()
-        pad = (k - 1) // 2
-        # Standard Quantized Conv (Most stable for FINN)
+        pad = (k - 1) // 2 # keep image size constant with dynamic padding
+        # default quantized conv block 8bit
         self.block = nn.Sequential(
             qnn.QuantConv2d(
                 in_c, out_c, kernel_size=k, stride=s, padding=pad,
@@ -24,12 +24,14 @@ class DynamicBlock(nn.Module):
 class NAS_GHM_Model(nn.Module):
     def __init__(self, genome, num_angles=6):
         super().__init__()
+
+        # convert input to 8bit requirement for FINN
         self.quant_input = qnn.QuantIdentity(bit_width=8, return_quant_tensor=True, act_quant=Int8ActPerTensorFloat)
 
         self.stages = nn.ModuleList()
         in_c = 4
 
-        # --- Encoder (Gene-driven) ---
+        # --- encoder (genome based)
         for i in range(3):
             out_c = genome['enc_ch'][i]
             depth = genome['enc_depth'][i]
@@ -43,21 +45,21 @@ class NAS_GHM_Model(nn.Module):
             self.stages.append(nn.Sequential(*layers))
             in_c = out_c
 
-        # --- Bottleneck ---
+        # --- bottleneck
         btl_c = genome['btl_ch']
         self.bottleneck = nn.Sequential(
             DynamicBlock(in_c, btl_c, 3, 1, 8),
             DynamicBlock(btl_c, in_c, 3, 1, 8)
         )
 
-        # --- Decoder ---
+        # --- decoder
         dec_layers = []
         for out_c in genome['dec_ch']:
             dec_layers.append(DynamicBlock(in_c, out_c, 3, 1, 8))
             in_c = out_c
         self.decoder = nn.Sequential(*dec_layers)
 
-        # --- Heads ---
+        # --- heads
         def make_head(out_ch):
             return qnn.QuantConv2d(in_c, out_ch, 1, weight_bit_width=8, bias=True, weight_quant=Int8WeightPerTensorFloat)
 
