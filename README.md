@@ -1,7 +1,3 @@
-Here is a clean, minimal, and structured README for your repository.
-
----
-
 # FINN-Heat: Hardware-Aware NAS for Real-Time Grasping
 
 FINN-Heat is a Neural Architecture Search (NAS) pipeline designed to discover efficient, quantized grasping models for Xilinx FPGAs (specifically the Kria KV260).
