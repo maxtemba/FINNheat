@@ -4,6 +4,7 @@ import torch.optim as optim
 import random
 import copy
 import shutil
+import csv
 from torch.utils.data import DataLoader, Subset
 
 from core.models import NAS_GHM_Model
@@ -13,11 +14,12 @@ from dataset import GraspNetHeatmapDataset
 
 # --- setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-POPULATION_SIZE = 10
+POPULATION_SIZE = 5
 GENERATIONS = 5
 ELITISM = 2
 TRAIN_BATCHES = 20
-TRAIN_EPOCHS = 1
+TRAIN_EPOCHS = 2
+LOG_FILE = "nas_search_log.csv"
 
 # --- search space
 SEARCH_SPACE = {
@@ -141,11 +143,18 @@ if __name__ == "__main__":
 
     indices = list(range(len(full_ds)))
     random.shuffle(indices)
-    search_loader = DataLoader(Subset(full_ds, indices[:1000]), batch_size=4, shuffle=True) # use 1000 images
+    search_loader = DataLoader(Subset(full_ds, indices[:1000]), batch_size=4, shuffle=True) # use 100 images
 
     # initialize pop
     population = [random_genome() for _ in range(POPULATION_SIZE)]
     print(f"initialized {POPULATION_SIZE} models.")
+
+    # report logging
+    print(f"Logging results to: {LOG_FILE}")
+    with open(LOG_FILE, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['generation', 'id', 'fitness', 'fps', 'loss', 'params',
+                         'enc_ch', 'enc_depth', 'enc_k', 'enc_bits', 'btl_ch', 'dec_ch'])
 
     best_ever_fitness = -1
     best_ever_genome = None
@@ -157,6 +166,15 @@ if __name__ == "__main__":
         for i, genome in enumerate(population):
             fit, fps, loss, params = evaluate_fitness(genome, search_loader, gen, i)
             scored_pop.append((fit, genome))
+
+           # report logging
+            with open(LOG_FILE, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    gen + 1, i, fit, fps, loss, params,
+                    genome['enc_ch'], genome['enc_depth'], genome['enc_k'],
+                    genome['enc_bits'], genome['btl_ch'], genome['dec_ch']
+                ])
 
             if fit > best_ever_fitness:
                 best_ever_fitness = fit

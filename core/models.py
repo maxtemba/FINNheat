@@ -51,10 +51,8 @@ class NAS_GHM_Model(nn.Module):
             QuantBlock(in_c, btl_c, 3, 1, 8),
             QuantBlock(btl_c, in_c, 3, 1, 8)
         )
-        in_c = btl_c # update in_c for decoder
 
         # --- decoder
-        # UPDATED: changed to ModuleList to handle the new 3-stage genome safely
         self.dec_stages = nn.ModuleList()
         for out_c in genome['dec_ch']:
             self.dec_stages.append(QuantBlock(in_c, out_c, 3, 1, 8))
@@ -80,7 +78,7 @@ class NAS_GHM_Model(nn.Module):
         # run bottleneck
         x = self.bottleneck(x)
 
-        # run decoder stages (UPDATED logic)
+        # run decoder stages
         for stage in self.dec_stages:
             x = stage(x)
 
