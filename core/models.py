@@ -3,7 +3,7 @@ import torch.nn as nn
 import brevitas.nn as qnn
 from brevitas.quant import Int8WeightPerTensorFloat, Uint8ActPerTensorFloat, Int8ActPerTensorFloat
 
-class DynamicBlock(nn.Module):
+class QuantBlock(nn.Module):
     def __init__(self, in_c, out_c, k, s, bits): # input chanel, output chanel, kernel, stride, bit width
         super().__init__()
         pad = (k - 1) // 2 # keep image size constant with dynamic padding
@@ -38,26 +38,27 @@ class NAS_GHM_Model(nn.Module):
             k     = genome['enc_k'][i]
             bits  = genome['enc_bits'][i]
 
-            layers = [DynamicBlock(in_c, out_c, k, 2, bits)] # Downsample
+            layers = [QuantBlock(in_c, out_c, k, 2, bits)] # Downsample
             for _ in range(depth - 1):
-                layers.append(DynamicBlock(out_c, out_c, k, 1, bits)) # Process
+                layers.append(QuantBlock(out_c, out_c, k, 1, bits)) # Process
 
             self.stages.append(nn.Sequential(*layers))
             in_c = out_c
 
-        # --- bottleneck
+        # --- bottleneck (genome based)
         btl_c = genome['btl_ch']
         self.bottleneck = nn.Sequential(
-            DynamicBlock(in_c, btl_c, 3, 1, 8),
-            DynamicBlock(btl_c, in_c, 3, 1, 8)
+            QuantBlock(in_c, btl_c, 3, 1, 8),
+            QuantBlock(btl_c, in_c, 3, 1, 8)
         )
+        in_c = btl_c # update in_c for decoder
 
         # --- decoder
-        dec_layers = []
+        # UPDATED: changed to ModuleList to handle the new 3-stage genome safely
+        self.dec_stages = nn.ModuleList()
         for out_c in genome['dec_ch']:
-            dec_layers.append(DynamicBlock(in_c, out_c, 3, 1, 8))
+            self.dec_stages.append(QuantBlock(in_c, out_c, 3, 1, 8))
             in_c = out_c
-        self.decoder = nn.Sequential(*dec_layers)
 
         # --- heads
         def make_head(out_ch):
@@ -71,6 +72,16 @@ class NAS_GHM_Model(nn.Module):
 
     def forward(self, x):
         x = self.quant_input(x)
-        for stage in self.stages: x = stage(x)
-        feat = self.decoder(self.bottleneck(x))
-        return (self.head_loc(feat), self.head_cls(feat), self.head_theta(feat), self.head_width(feat), self.head_depth(feat))
+
+        # run encoder stages
+        for stage in self.stages:
+            x = stage(x)
+
+        # run bottleneck
+        x = self.bottleneck(x)
+
+        # run decoder stages (UPDATED logic)
+        for stage in self.dec_stages:
+            x = stage(x)
+
+        return (self.head_loc(x), self.head_cls(x), self.head_theta(x), self.head_width(x), self.head_depth(x))

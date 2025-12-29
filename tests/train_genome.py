@@ -20,12 +20,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 4
 
 # hyperparameters
-EPOCHS = 1
+EPOCHS = 10
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 
 # limits
-MAX_BATCHES = 100  # use none for full dataset
+MAX_BATCHES = 10000  # use none for full dataset
 
 def main():
     print(f"starting training on {DEVICE}")
