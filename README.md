@@ -1,110 +1,104 @@
-# FINN-Heat: Hardware-Aware NAS for Real-Time Grasping
-
+FINN-Heat: Hardware-Aware NAS for Real-Time Grasping
 FINN-Heat is a Neural Architecture Search (NAS) pipeline designed to discover efficient, quantized grasping models for Xilinx FPGAs (specifically the Kria KV260).
 
-Unlike standard approaches that compress a large model (like ResNet-50) after training, this project searches for the optimal architecture from scratch. It evolves a "genome" of layers, channels, and bit-widths (4-bit/8-bit) to maximize accuracy while minimizing hardware latency.
+Unlike standard approaches that compress a huge model after training, this project searches for the optimal architecture from scratch. It evolves a "genome" of layers, channels, and bit-widths (4-bit/8-bit) to find the sweet spot between high accuracy and low latency.
 
-## Project Structure
+Setup & Installation
+This project uses FINN+ (by EKI Project), which allows for a clean, containerless installation without requiring Docker.
 
-The project is organized into a core library, the main search engine, and testing scripts.
+1. Environment Create a clean python environment (Python 3.10 required).
 
-```text
+Bash
+
+python -m venv venv
+source venv/bin/activate
+2. Install FINN+ and Dependencies Install the finn-plus package directly via pip. This pulls in Brevitas and the QONNX tools automatically.
+
+Bash
+
+# 1. Install standard helpers
+pip install numpy pandas pillow tqdm matplotlib
+
+# 2. Install FINN+ (Containerless Compiler)
+pip install finn-plus
+
+# 3. Pull external Vivado/HLS dependencies
+finn deps update
+3. Xilinx Tools Ensure you have Vivado/Vitis HLS (2022.2 or 2024.2) installed and in your PATH. FINN+ uses these locally to run the hardware estimation and synthesis.
+
+Project Structure
+The project is organized into the core logic, the search engine, and the testing suite.
+
+Plaintext
+
 .
-├── nas_search.py           # The Evolutionary Search Engine. Runs the genetic algorithm.
-├── dataset.py              # GraspNet data loader with on-the-fly target generation.
-├── heatmap_generator.py    # Logic for Gaussian peaks and anchor encoding (HGGD).
+├── nas_search.py           # The Search Engine. Runs the genetic algorithm.
 ├── core/
+│   ├── dataset.py          # Clean GraspNet loader with on-the-fly target generation.
+│   ├── evolution.py        # The Genetic Algorithm logic (mutate, crossover).
+│   ├── hardware.py         # The Estimator. Compiles to FINN HLS to predict FPS/LUTs.
+│   ├── heatmap_generator.py # Physics-based logic for Gaussian peaks and anchors.
 │   ├── models.py           # The Search Space. Defines the Dynamic NAS Model.
-│   ├── hardware.py         # The Hardware Evaluator. Compiles to FINN HLS to estimate FPS/LUTs.
-│   └── training.py         # The Accuracy Evaluator. Unified training loop and Loss function.
+│   ├── training.py         # The Trainer. Unified loop and HGGD Loss function.
+│   └── utils.py            # Helpers to load/save genomes and weights.
 ├── tests/
-│   ├── train_genome.py     # Fully trains a discovered architecture (from best_genome.txt).
-│   ├── verify_pred.py      # Runs inference on a single image to visualize predictions.
-│   ├── export.py           # Exports the trained model to QONNX for the final FPGA build.
+│   ├── train_genome.py     # Fully trains a winner architecture (from best_genome.txt).
+│   ├── verify_pred.py      # Runs inference on images to visualize predictions.
+│   ├── export_qnnx.py      # Exports the trained model to QONNX for the FPGA build.
 │   └── verify_gt.py        # Debug tool to check ground truth generation.
-└── data/                   # Symlink or directory containing GraspNet-1Billion data.
+└── data/                   # Directory containing GraspNet data.
+The Workflow
+This pipeline follows a 4-step process: Search → Train → Verify → Export.
 
-```
+1. Run the Search (NAS)
+   Start the evolutionary algorithm. It spawns a population of random models, estimates their hardware performance (FPS) on the Kria KV260 using the local FINN+ install, and evolves them over generations.
 
-## Prerequisites
+Bash
 
-* **Python 3.10+**
-* **Brevitas:** For quantization-aware training.
-* **FINN-Base:** For the hardware build flow and ONNX export.
-* **Vivado/Vitis HLS:** Required only if running the hardware estimator locally.
-
-## The Workflow
-
-This pipeline follows a 4-step process: **Search → Train → Verify → Export**.
-
-### 1. Run the Search (NAS)
-
-Run the evolutionary algorithm to find the best architecture for your hardware constraints. This script spawns a population of random models, estimates their hardware performance (FPS) and accuracy (Loss), and evolves them over generations.
-
-```bash
 python nas_search.py
+Output: Generates best_nas_genome.txt and logs history to nas_search_log.csv.
 
-```
+2. Full Training
+   Once you have a winner, train it fully on the dataset. This script reconstructs the model from the genome file and runs a complete training cycle with detailed logging.
 
-**Output:** Generates `best_nas_genome.txt`.
+Bash
 
-### 2. Full Training
-
-Once the search identifies the best genome, train it fully on the dataset. This script reads the genome file to reconstruct the exact model architecture before training.
-
-```bash
-# Update GENOME_FILE path in the script if necessary
 python tests/train_genome.py
+Output: Saves weights to trained_model_hggd.pth and stats to training_log.csv.
 
-```
+3. Verify Predictions
+   Visual validation is critical. Run this to see how your model performs on a random test image compared to the ground truth.
 
-**Output:** Saves weights to `trained_model_hggd.pth`.
+Bash
 
-### 3. Verify Predictions
-
-Visual validation is critical for grasping. Run this script to generate a visualization (Input RGB vs. Heatmap Predictions) for a random test image.
-
-```bash
 python tests/verify_pred.py
+Output: Generates prediction_nas.png.
 
-```
+4. Export for FPGA
+   To deploy, export the trained model to QONNX. This format preserves the quantization metadata (INT4/INT8) required by the FINN+ compiler.
 
-**Output:** Saves `prediction_nas_3000.png`.
+Bash
 
-### 4. Export for FPGA
+python tests/export_qnnx.py
+Output: Generates model.qonnx.
 
-To deploy the model, export it to the QONNX intermediate representation. This format preserves the quantization metadata required by the FINN compiler.
+Core Mechanics
+Hardware Estimator (core/hardware.py)
+A custom proxy for the FINN+ compiler. Because we use finn-plus, we can invoke the build steps directly from Python without launching a Docker container. It:
 
-```bash
-python tests/export.py
+Exports the candidate to QONNX.
 
-```
+Runs cleanup transformations (Tidy, Streamline).
 
-**Output:** Generates `nas_model_export.onnx`.
+Calculates optimal "Folding Factors" (Parallelism vs. Resources).
 
-## Core Components
+Reports estimated FPS (targeting 144Hz+) and LUT/BRAM usage.
 
-### The Search Space (`core/models.py`)
+Heatmap Generator (core/heatmap_generator.py)
+Implements the HGGD paper logic. It converts raw 5-DoF grasp rectangles into 5 dense training tensors:
 
-Defines a `NAS_GHM_Model` constructed from `DynamicBlock` layers. The architecture is flexible, defined by a dictionary ("genome") that specifies:
+Location: Gaussian confidence peaks.
 
-* **Encoders:** Number of stages, kernel sizes (3x3 vs 5x5), channel widths, and bit-widths per stage.
-* **Decoder:** Channel widths for upsampling.
-* **Quantization:** Mixed-precision support (4-bit or 8-bit weights).
+Class: Anchor bin classification.
 
-### Hardware Estimator (`core/hardware.py`)
-
-A "Turbo-Mode" estimator that acts as a proxy for the full FINN compiler. For every candidate model in the search, it:
-
-1. Exports the model to ONNX.
-2. Runs FINN cleanup transformations (Tidy, Streamline).
-3. Calculates optimal folding factors (SIMD/PE) to saturate the FPGA.
-4. Reports estimated FPS, Latency, and Resource Usage (LUT/BRAM).
-
-### Heatmap Generator (`heatmap_generator.py`)
-
-Implements the specific logic from the HGGD (Heatmap-based Grasp Generation) paper. It converts raw 5-DoF grasp rectangles into 5 dense tensors:
-
-* **Location Map:** Gaussian confidence peaks.
-* **Class Map:** Anchor bin classification.
-* **Regression Maps:** Offsets for Angle, Width, and Depth.
+Regression: Offsets for Angle, Width, and Depth.
