@@ -6,7 +6,7 @@ import brevitas.onnx as bo
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import (
-    DataflowBuildConfig, DataflowOutputType, ShellFlowType
+    DataflowBuildConfig, DataflowOutputType
 )
 from finn.builder.build_dataflow_steps import (
     step_qonnx_to_finn, step_tidy_up, step_streamline,
@@ -15,69 +15,59 @@ from finn.builder.build_dataflow_steps import (
     step_generate_estimate_reports
 )
 
-# --- config for Kria KV260
+# --- config
 TARGET_BOARD = "KV260_SOM"
 TARGET_FPGA = "xck26-sfvc784-2LV-c"
-TARGET_CLOCK = 5.0  # equals 200 MHz frequency
-MAX_PE = 64         # TODO
-MAX_SIMD = 64       # TODO
+TARGET_CLOCK = 3.33  # 300 MHz
 
-# for partial FINN installation without Vivado refer to dummy path.
 if 'XILINX_VIVADO' not in os.environ:
-    os.environ['XILINX_VIVADO'] = '/dummy'
+    os.environ['XILINX_VIVADO'] = '/dummy' # run FINN without Vivado installation
 
 
 def export_to_qonnx(model, filename):
     """
-    exports a model to Brevitas QNNX. Used by hardware estimator and export script.
+    exports pytorch model as quantized ONNX file uses dummy input for it.
 
-    :param model: trained model.
-    :param filename: output filename.
-    :return: true if successfully exported, false otherwise.
+    :param model: pytorch model.
+    :param filename: path to export ONNX file.
+    :return: true/false.
     """
     model.eval()
-
-    # dummy input image (Batch, Channels, Height, Width) to determine image flow through the network.
-    dummy_input = torch.randn(1, 4, 360, 640)
-
+    dummy = torch.randn(1, 4, 360, 640)
     print(f"exporting QONNX model to: {filename}")
     try:
-        bo.export_qonnx(model, input_t=dummy_input, export_path=filename)
+        bo.export_qonnx(model, input_t=dummy, export_path=filename)
         return True
     except Exception as e:
         print(f"export failed: {e}")
         return False
 
-def get_folding_factor(total_channels, hardware_limit):
+def get_folding_factor(channels, limit):
     """
-    calculates the optimal hardware parallelism.
+    finds optimal folding factor for hardware limit.
 
-    :param total_channels: dimension of the weight tensor to parallelize.
-    :param hardware_limit: maximum allowed parallelism factor.
-    :return: optimal folding factor.
+    :param channels: number of channels.
+    :param limit: maximum number of allowable parallelism (PE or SIMD).
+    :return: best factor.
     """
-
-    # largest divisor of (total_channels) that fits within the (hardware_limit).
-    for i in range(hardware_limit, 0, -1):
-        if total_channels % i == 0:
-            return i
+    for i in range(limit, 0, -1):
+        if channels % i == 0: return i
     return 1
 
 def estimate_performance(model, build_name="finn_eval"):
     """
-    function that runs the FINN compiler to estimate: (FPS) and resource usage (LUTs, BRAMs).
-    based on the estimation pipeline:
-    1. export.
-    2. transform.
-    3. auto folding.
-    4. report.
+    estimate performance of hardware model using FINN compiler (FPS, LUTs, bRAM).
+    1. export model to QONNX.
+    2. convert QONNX to FINN compatible.
+    3. analyze all layers to determine optimal folding (PE/SIMD).
+    4. run FINN estimator to predict hardware performance.
 
     :param model: pytorch model.
-    :param build_name: build directory.
-    :return: dictionary containing hardware metrics.
+    :param build_name: FINN build name.
+    :return: hardware estimate.
     """
 
-    # --- setup build directory structure
+    # FINN environment setup
     build_dir = os.path.abspath(f"build_{build_name}")
     onnx_file = os.path.join(build_dir, "model.onnx")
     os.environ['FINN_BUILD_DIR'] = build_dir
@@ -85,15 +75,9 @@ def estimate_performance(model, build_name="finn_eval"):
 
     print(f"starting hardware estimation for: {build_name}")
 
-    # 1. export model to QNNX
+    if not export_to_qonnx(model, onnx_file): return None
 
-    if not export_to_qonnx(model, onnx_file):
-        return None
-
-
-    # 2. transform to hardware representation for later synthetase
-
-    # loads model into Finn internal wrapper.
+    # 1. graph preparation (QONNX to FINN hls)
     mw = ModelWrapper(onnx_file)
     cfg_temp = DataflowBuildConfig(
         output_dir=build_dir,
@@ -102,59 +86,57 @@ def estimate_performance(model, build_name="finn_eval"):
         synth_clk_period_ns=TARGET_CLOCK
     )
 
-    # runs FINN pipeline transformation.
     try:
         mw = step_qonnx_to_finn(mw, cfg_temp)
         mw = step_tidy_up(mw, cfg_temp)
         mw = step_streamline(mw, cfg_temp)
         mw = step_convert_to_hw(mw, cfg_temp)
     except Exception as e:
-        print(f"graph preparation failed: {e}")
+        print(f"graph prep failed: {e}")
         return None
 
+    # 2. auto folding logic
+    folding = {"Defaults": {"ram_style": "auto"}}
+    mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")] # hardware units
 
-    # 3. auto folding for parallelism
-
-    folding_config = {"Defaults": {"ram_style": "auto"}}
-
-    # find nodes from the model.
-    mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")] # filters out non conv. and linear/dense layers
-    print(f"found {len(mvau_nodes)} layers to accelerate.")
-
-    # loop through filtered nodes/layers.
     for i, node in enumerate(mvau_nodes):
+        name = f"MVAU_hls_{i}"
+        w = mw.get_initializer(node.input[1]) # weights
+        if w is None: continue
 
-        # manually construct node names to avoid default unstable or empty node names.
-        target_name = f"MVAU_hls_{i}"
+        # shape extraction from weights
+        fan_in       = w.shape[0] # width controls SIMD (memory)
+        out_channels = w.shape[1] # height controls PE (compute)
 
-        # get weight tensor to determine dimensions (kernel values).
-        weights = mw.get_initializer(node.input[1])
-        if weights is None: continue
+        # --- auto logic ---
 
-        # optimal parallelism based on weight shapes.
-        pe = get_folding_factor(weights.shape[1], MAX_PE)  # PE (Parallel Elements) corresponds to output channels
-        simd = get_folding_factor(weights.shape[0], MAX_SIMD)   # SIMD (Single Instruction Multiple Data) corresponds to input channels
+        # baseline targets
+        pe_target   = 16
+        simd_target = 8
 
-        folding_config[target_name] = {
-            "PE": int(pe),
-            "SIMD": int(simd),
-            "mem_mode": "internal_decoupled"
-        }
+        # check: input layer
+        # throttle if input has fewer channels than target and lower SIMD to match
+        if fan_in < 8: simd_target = fan_in
 
-    # save folding configuration to JSON.
+        # check: big layers
+        # throttle for big layers (>=128) to save LUTs/BRAM
+        # 64 channel layers run full speed (PE 16)
+        if out_channels >= 128: pe_target = 8
+        if fan_in       >= 128: simd_target = 4
+
+        # match check: parallelism needs to divide dimensions evenly
+        pe   = get_folding_factor(out_channels, pe_target)
+        simd = get_folding_factor(fan_in, simd_target)
+
+        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled"}
+
+    # 3. build and estimate
     config_path = os.path.join(build_dir, "auto_config.json")
-    with open(config_path, "w") as f:
-        json.dump(folding_config, f, indent=2)
+    with open(config_path, "w") as f: json.dump(folding, f, indent=2)
 
-
-    # 4. evaluation
-
-    # custom pipeline setup for estimates.
     cfg = DataflowBuildConfig(
-        output_dir=build_dir,
-        board=TARGET_BOARD,
-        fpga_part=TARGET_FPGA,
-        synth_clk_period_ns=TARGET_CLOCK,
+        output_dir=build_dir, board=TARGET_BOARD,
+        fpga_part=TARGET_FPGA, synth_clk_period_ns=TARGET_CLOCK,
         folding_config_file=config_path,
         generate_outputs=[DataflowOutputType.ESTIMATE_REPORTS],
         steps=[
@@ -165,27 +147,30 @@ def estimate_performance(model, build_name="finn_eval"):
         ]
     )
 
-    # read report
     try:
         build_dataflow_cfg(onnx_file, cfg=cfg)
 
-        report_path = os.path.join(build_dir, "report", "estimate_network_performance.json")
+        p_path = os.path.join(build_dir, "report", "estimate_network_performance.json")
+        r_path = os.path.join(build_dir, "report", "estimate_layer_resources.json")
 
-        if os.path.exists(report_path):
-            with open(report_path, 'r') as f:
-                res = json.load(f)
+        res_perf = {}
+        res_res = {}
 
-            return {
-                "fps": res.get("estimated_throughput_fps", 0),
-                "latency": res.get("estimated_latency_cycles", 0),
-                "lut": res.get("total_luts", 0),
-                "bram": res.get("total_brams", 0),
-                "dsp": res.get("total_dsps", 0)
-            }
+        if os.path.exists(p_path):
+            with open(p_path, 'r') as f: res_perf = json.load(f)
+        if os.path.exists(r_path):
+            with open(r_path, 'r') as f: res_res = json.load(f)
 
-        print(f"report missing at: {report_path}")
-        return None
+        total = res_res.get("total", {})
+
+        return {
+            "fps": res_perf.get("estimated_throughput_fps", 0),
+            "latency": res_perf.get("critical_path_cycles", 0),
+            "lut": total.get("LUT", 0),
+            "bram": total.get("BRAM_18K", 0),
+            "dsp": total.get("DSP", 0)
+        }
 
     except Exception as e:
-        print(f"estimation process failed: {e}")
+        print(f"estimation failed: {e}")
         return None

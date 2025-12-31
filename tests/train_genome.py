@@ -25,7 +25,7 @@ BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 
 # limits
-MAX_BATCHES = 10000  # use none for full dataset
+MAX_BATCHES = 5000  # none for full dataset
 
 def main():
     print(f"starting training on {DEVICE}")
@@ -61,7 +61,8 @@ def main():
         epochs=EPOCHS,
         save_path=SAVE_PATH,
         max_batches=MAX_BATCHES,
-        print_every=10
+        print_every=0,
+        log_csv="training_log.csv"
     )
 
 if __name__ == "__main__":

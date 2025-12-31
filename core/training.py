@@ -1,3 +1,5 @@
+import os
+import csv
 import torch
 import torch.nn.functional as F
 
@@ -14,7 +16,7 @@ def hggd_loss(preds, targets, device):
 
     pred_loc, pred_cls, pred_theta, pred_width, pred_depth = preds
     gt_loc, gt_cls, gt_theta, gt_width, gt_depth = targets
-    eps = 1e-6
+    eps = 1e-6 # log(0) errors
 
     # localization loss
     pred_loc = torch.clamp(torch.sigmoid(pred_loc), eps, 1 - eps)
@@ -37,9 +39,9 @@ def hggd_loss(preds, targets, device):
     return loss_loc + loss_reg
 
 
-def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10):
+def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10, generation=None, log_csv=None):
     """
-    main training loop that both handles fast NAS single training and full training.
+    main training loop that both handles fast NAS proxy training and full training.
 
     :param model: pytorch model.
     :param loader: dataloader.
@@ -49,19 +51,21 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
     :param save_path: (optional) path to save the trained model.
     :param max_batches: (optional) maximum number of batches.
     :param print_every: print settings.
+    :param generation: (optional) current generation number for logging.
+    :param log_csv: (optional) path to csv file for logging loss.
     :return: best loss.
     """
 
     model.train()
     best_loss = float('inf')
 
-    # Logging info
+    # console logging
     mode = "training" if save_path else "proxy search"
     limit_str = f"{max_batches} batches" if max_batches else "full dataset"
-    if save_path: # Only print this header for full training to keep NAS log clean
+    if save_path:
         print(f"\n{mode}: {epochs} epochs x [{limit_str}]")
 
-    # -- bath loop
+    # -- epoch loop
     for epoch in range(epochs):
         if epochs > 1: print(f"--- epoch {epoch+1}/{epochs} ---")
 
@@ -84,7 +88,6 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
             loss = hggd_loss(preds, targets, device)
             loss.backward()
 
-            # Optional: Clip gradients to prevent real explosions
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
@@ -97,6 +100,15 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
 
         # --- finished epoch
         avg_loss = total_loss / count if count > 0 else 999.0
+
+        # csv logging
+        if log_csv and generation is not None:
+            file_exists = os.path.isfile(log_csv)
+            with open(log_csv, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['generation', 'epoch', 'avg_loss'])
+                writer.writerow([generation, epoch + 1, avg_loss])
 
         if epochs > 1:
             print(f"avg loss: {avg_loss:.4f}")

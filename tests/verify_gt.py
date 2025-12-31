@@ -10,7 +10,7 @@ from dataset import GraspNetHeatmapDataset
 GRASPNET_ROOT = "../data/graspnet"
 
 # parameters
-IMG_INDEX = 3004
+IMG_INDEX = 3000
 CAMERA = 'kinect'
 DOWNSAMPLE_FACTOR = 8
 OUTPUT_FILENAME = f"gt_{IMG_INDEX}.png"

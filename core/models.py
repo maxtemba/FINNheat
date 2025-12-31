@@ -45,7 +45,7 @@ class NAS_GHM_Model(nn.Module):
             self.stages.append(nn.Sequential(*layers))
             in_c = out_c
 
-        # --- bottleneck (genome based)
+        # --- bottleneck
         btl_c = genome['btl_ch']
         self.bottleneck = nn.Sequential(
             QuantBlock(in_c, btl_c, 3, 1, 8),
