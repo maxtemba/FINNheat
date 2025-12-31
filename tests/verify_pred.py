@@ -4,19 +4,18 @@ import torch
 import matplotlib.pyplot as plt
 
 sys.path.append("..")
-# we import the shared helper instead of the raw model class
 from core.utils import load_nas_model
-from dataset import GraspNetHeatmapDataset
+from core.dataset import GraspNetHeatmapDataset
 
 # --- config paths
 GENOME_FILE = "best_genome.txt"
-WEIGHTS_FILE = "trained_model_hggd.pth"
+WEIGHTS_FILE = "trained_model.pth"
 GRASPNET_ROOT = "../data/graspnet"
 
 # --- settings
 IMG_INDEX = 3000
 CAMERA = 'kinect'
-OUTPUT_FILENAME = f"prediction_nas_{IMG_INDEX}.png"
+OUTPUT_FILENAME = f"prediction_{IMG_INDEX}.png"
 
 def main():
     print(f"starting prediction verification for image {IMG_INDEX}...")

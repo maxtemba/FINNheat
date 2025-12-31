@@ -3,8 +3,8 @@ import torch
 
 class HeatmapGenerator:
     """
-    hggd heatmap generator.
-    generates 5 ground truth (loc, cls, theta, width, depth).
+    hggd-compliant heatmap generator.
+    generates 5 ground truth tensors (loc, cls, theta, width, depth).
     matches section iv-b of the paper.
     """
     def __init__(self, full_hw, grid_size=8, num_angles=6,

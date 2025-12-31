@@ -7,8 +7,8 @@ from core.utils import load_nas_model
 
 # --- config paths
 GENOME_FILE = "best_genome.txt"
-WEIGHTS_FILE = "trained_model_hggd.pth"
-OUTPUT_ONNX = "nas_model_export.onnx"
+WEIGHTS_FILE = "trained_model.pth"
+OUTPUT_ONNX = "model_export.onnx"
 
 def main():
     print("starting model export...")

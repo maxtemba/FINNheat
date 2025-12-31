@@ -7,12 +7,12 @@ import sys
 sys.path.append("..")
 from core.utils import load_nas_model  # <--- uses the new shared helper
 from core.training import train_model
-from dataset import GraspNetHeatmapDataset
+from core.dataset import GraspNetHeatmapDataset
 
 # --- settings
 # paths (relative to tests/ folder)
 GENOME_FILE = "best_genome.txt"
-SAVE_PATH   = "trained_model_hggd.pth"
+SAVE_PATH   = "trained_model.pth"
 DATA_PATH   = "../data/graspnet"
 
 # hardware

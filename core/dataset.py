@@ -4,7 +4,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from PIL import Image
-from heatmap_generator import HeatmapGenerator
+
+# relative import since they are now siblings in core/
+from .heatmap_generator import HeatmapGenerator
 
 class GraspNetHeatmapDataset(Dataset):
     """

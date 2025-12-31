@@ -3,7 +3,7 @@ import os
 import matplotlib.pyplot as plt
 
 sys.path.append("..")
-from dataset import GraspNetHeatmapDataset
+from core.dataset import GraspNetHeatmapDataset
 
 # --- settings
 # paths
