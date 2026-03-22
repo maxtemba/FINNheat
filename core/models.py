@@ -48,14 +48,14 @@ class NAS_GHM_Model(nn.Module):
         # --- bottleneck
         btl_c = genome['btl_ch']
         self.bottleneck = nn.Sequential(
-            QuantBlock(in_c, btl_c, 3, 1, 8),
-            QuantBlock(btl_c, in_c, 3, 1, 8)
+            QuantBlock(in_c, btl_c, 1, 1, 8),
+            QuantBlock(btl_c, in_c, 1, 1, 8)
         )
 
         # --- decoder
         self.dec_stages = nn.ModuleList()
         for out_c in genome['dec_ch']:
-            self.dec_stages.append(QuantBlock(in_c, out_c, 3, 1, 8))
+            self.dec_stages.append(QuantBlock(in_c, out_c, 1, 1, 8))
             in_c = out_c
 
         # --- heads

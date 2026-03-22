@@ -140,24 +140,26 @@ def synthesize_performance(model, build_name="finn_synth"):
         with open(ooc_path, 'r') as f:
             ooc = json.load(f)
 
-        res = ooc.get("resources", {})
-        timing = ooc.get("timing", {})
-
+        # ooc json is flat (no "resources"/"timing" nesting)
         # estimated performance is still from the dataflow model (not affected by OOC)
         est_fps = 0
         if os.path.exists(est_p_path):
             with open(est_p_path, 'r') as f:
                 est_fps = json.load(f).get("estimated_throughput_fps", 0)
 
+        wns = ooc.get("WNS", None)
+        fmax = ooc.get("fmax_mhz", None)
+        clk  = round(1000.0 / fmax, 3) if fmax else TARGET_CLOCK
+
         return {
             "fps_estimate":  est_fps,
-            "lut":           res.get("LUT", 0),
-            "lut_ram":       res.get("LUTRAM", 0),
-            "ff":            res.get("FF", 0),
-            "bram":          res.get("BRAM_18K", 0),
-            "dsp":           res.get("DSP48E2", 0),
-            "timing_wns_ns": timing.get("WNS", None),
-            "clk_period_ns": timing.get("clk_period_ns", TARGET_CLOCK),
+            "lut":           ooc.get("LUT", 0),
+            "lut_ram":       ooc.get("LUTRAM", 0),
+            "ff":            ooc.get("FF", 0),
+            "bram":          int(ooc.get("BRAM_18K", 0)) + 2 * int(ooc.get("BRAM_36K", 0)),
+            "dsp":           ooc.get("DSP", 0),
+            "timing_wns_ns": wns,
+            "clk_period_ns": clk,
         }
 
     except Exception as e:
@@ -183,7 +185,7 @@ def main():
     if metrics:
         wns = metrics['timing_wns_ns']
         clk = metrics['clk_period_ns']
-        freq_mhz = round(1000 / clk, 1) if clk else "?"
+        freq_mhz = round(1000.0 / clk, 1) if clk else "?"
         timing_ok = wns is not None and wns >= 0
 
         print("\nFull Synthesis Results (OOC):")

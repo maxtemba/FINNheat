@@ -73,16 +73,9 @@ def build_folding_config(mw, config_path):
         fan_in       = w.shape[0] # width controls SIMD (memory)
         out_channels = w.shape[1] # height controls PE (compute)
 
-        # baseline targets (conservative to avoid hls unroll explosion and lut overuse)
-        pe_target   = 4
-        simd_target = 4
-
-        # throttle if input has fewer channels than target
-        if fan_in < 8:           simd_target = fan_in
-
-        # further throttle for very large fan_in / out_channels to save LUTs
-        if fan_in >= 256:        simd_target = 2
-        if out_channels >= 128:  pe_target = 2
+        # minimal parallelism: pe=1 simd=1 guaranteed to clear hls and fit on device
+        pe_target   = 1
+        simd_target = 1
 
         # parallelism must divide dimensions evenly
         pe   = get_folding_factor(out_channels, pe_target)
