@@ -46,7 +46,7 @@ def evaluate_fitness(genome, loader, generation, individual_id):
     hw_metrics = estimate_performance(model, build_name=build_tag)
 
     # clean up
-    shutil.rmtree(f"build_{build_tag}", ignore_errors=True)
+    shutil.rmtree(os.path.join("builds", f"build_{build_tag}"), ignore_errors=True)
 
     # filter 1: estimator failure
     if not hw_metrics or hw_metrics['fps'] == 0:
@@ -128,7 +128,7 @@ if __name__ == "__main__":
             if fit > best_ever_fitness:
                 best_ever_fitness = fit
                 best_ever_genome = genome
-                with open("best_nas_genome.txt", "w") as f: f.write(str(genome))
+                with open("genomes/best_nas_genome.txt", "w") as f: f.write(str(genome))
                 print("      🌟 new GLOBAL BEST saved.")
 
         scored_pop.sort(key=lambda x: x[0], reverse=True)

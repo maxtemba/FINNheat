@@ -13,7 +13,7 @@ GRASPNET_ROOT = "../data/graspnet"
 IMG_INDEX = 3000
 CAMERA = 'kinect'
 DOWNSAMPLE_FACTOR = 8
-OUTPUT_FILENAME = f"gt_{IMG_INDEX}.png"
+OUTPUT_FILENAME = f"outputs/gt_{IMG_INDEX}.png"
 
 def main():
     print(f"starting ground truth verification for image {IMG_INDEX}...")
@@ -89,6 +89,7 @@ def main():
     plt.tight_layout()
 
     # 5. save output
+    os.makedirs("outputs", exist_ok=True)
     plt.savefig(OUTPUT_FILENAME, dpi=150)
     print(f"visualization saved to {OUTPUT_FILENAME}")
 

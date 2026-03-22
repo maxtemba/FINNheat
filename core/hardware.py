@@ -1,8 +1,7 @@
 import os
 import json
-import torch
-import brevitas.onnx as bo
 
+from core.export import export_to_qonnx
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import (
@@ -23,24 +22,6 @@ TARGET_CLOCK = 3.33  # 300 MHz
 if 'XILINX_VIVADO' not in os.environ:
     os.environ['XILINX_VIVADO'] = '/dummy' # run FINN without Vivado installation
 
-
-def export_to_qonnx(model, filename):
-    """
-    exports pytorch model as quantized ONNX file uses dummy input for it.
-
-    :param model: pytorch model.
-    :param filename: path to export ONNX file.
-    :return: true/false.
-    """
-    model.eval()
-    dummy = torch.randn(1, 4, 360, 640)
-    print(f"exporting QONNX model to: {filename}")
-    try:
-        bo.export_qonnx(model, input_t=dummy, export_path=filename)
-        return True
-    except Exception as e:
-        print(f"export failed: {e}")
-        return False
 
 def get_folding_factor(channels, limit):
     """
@@ -100,7 +81,7 @@ def estimate_performance(model, build_name="finn_eval"):
     """
 
     # FINN environment setup
-    build_dir = os.path.abspath(f"build_{build_name}")
+    build_dir = os.path.abspath(os.path.join("builds", f"build_{build_name}"))
     onnx_file = os.path.join(build_dir, "model.onnx")
     os.environ['FINN_BUILD_DIR'] = build_dir
     os.makedirs(build_dir, exist_ok=True)

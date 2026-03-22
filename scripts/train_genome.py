@@ -5,14 +5,14 @@ import os
 import sys
 
 sys.path.append("..")
-from core.utils import load_nas_model  # <--- uses the new shared helper
+from core.models import load_nas_model
 from core.training import train_model
 from core.dataset import GraspNetHeatmapDataset
 
 # --- settings
-# paths (relative to tests/ folder)
-GENOME_FILE = "best_genome.txt"
-SAVE_PATH   = "trained_model.pth"
+# paths (relative to scripts/ folder)
+GENOME_FILE = "../genomes/best_genome.txt"
+SAVE_PATH   = "outputs/trained_model.pth"
 DATA_PATH   = "../data/graspnet"
 
 # hardware
@@ -29,8 +29,9 @@ MAX_BATCHES = 5000  # none for full dataset
 
 def main():
     print(f"starting training on {DEVICE}")
+    os.makedirs("outputs", exist_ok=True)
 
-    # 1. build model and load weights uses logic from core/utils.py
+    # 1. build model and load weights
     try:
         model = load_nas_model(GENOME_FILE, weights_path=None, device=DEVICE)
         print("model built successfully.")

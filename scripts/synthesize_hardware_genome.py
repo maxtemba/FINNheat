@@ -14,8 +14,9 @@ os.environ["VIVADO_PATH"]   = "/tools/Xilinx/Vivado/2024.2"
 os.environ["FINN_RTLLIB"]   = "/home/max/finn-plus/finn-rtllib"
 
 sys.path.append("..")
-from core.utils import load_nas_model
-from core.hardware import export_to_qonnx, build_folding_config, TARGET_BOARD, TARGET_FPGA, TARGET_CLOCK
+from core.models import load_nas_model
+from core.export import export_to_qonnx
+from core.hardware import build_folding_config, TARGET_BOARD, TARGET_FPGA, TARGET_CLOCK
 
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg
@@ -34,7 +35,7 @@ from finn.builder.build_dataflow_steps import (
 )
 
 # --- config paths
-GENOME_FILE = "best_genome.txt"
+GENOME_FILE = "../genomes/best_genome.txt"
 BUILD_NAME  = "synth_best_genome"
 
 # set to True to also run full place-and-route and generate a bitfile
@@ -55,7 +56,7 @@ def synthesize_performance(model, build_name="finn_synth"):
     :return: dict with real synthesis metrics, or None on failure.
     """
 
-    build_dir = os.path.abspath(f"build_{build_name}")
+    build_dir = os.path.abspath(os.path.join("builds", f"build_{build_name}"))
     onnx_file = os.path.join(build_dir, "model.onnx")
     os.environ['FINN_BUILD_DIR'] = build_dir
     os.makedirs(build_dir, exist_ok=True)
@@ -73,7 +74,7 @@ def synthesize_performance(model, build_name="finn_synth"):
     if not export_to_qonnx(model, onnx_file):
         return None
 
-    # --- auto folding: prepare FINN IR, then build config via core/hardware.py ---
+    # --- auto folding: prepare FINN IR, then build config ---
     mw = ModelWrapper(onnx_file)
     cfg_temp = DataflowBuildConfig(
         output_dir=build_dir,

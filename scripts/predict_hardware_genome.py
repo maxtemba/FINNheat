@@ -7,16 +7,15 @@ initialize_dummy_settings()
 
 sys.path.append("..")
 from core.hardware import estimate_performance
-from core.utils import load_nas_model
+from core.models import load_nas_model
 
 # --- config paths
-GENOME_FILE = "best_genome.txt"
+GENOME_FILE = "../genomes/best_genome.txt"
 
 def main():
     print("starting hardware verification for the best genome...")
 
-    # 1. build model and load weights uses logic from core/utils.py
-    # weights_path defaults to None, only the architecture structure is needed for estimation.
+    # 1. build model (weights not needed for estimation)
     try:
         model = load_nas_model(GENOME_FILE, device='cpu')
         print("model built successfully.")

@@ -4,23 +4,23 @@ import torch
 import matplotlib.pyplot as plt
 
 sys.path.append("..")
-from core.utils import load_nas_model
+from core.models import load_nas_model
 from core.dataset import GraspNetHeatmapDataset
 
 # --- config paths
-GENOME_FILE = "best_genome.txt"
-WEIGHTS_FILE = "trained_model.pth"
+GENOME_FILE = "../genomes/best_genome.txt"
+WEIGHTS_FILE = "outputs/trained_model.pth"
 GRASPNET_ROOT = "../data/graspnet"
 
 # --- settings
 IMG_INDEX = 3000
 CAMERA = 'kinect'
-OUTPUT_FILENAME = f"prediction_{IMG_INDEX}.png"
+OUTPUT_FILENAME = f"outputs/prediction_{IMG_INDEX}.png"
 
 def main():
     print(f"starting prediction verification for image {IMG_INDEX}...")
 
-    # 1. build model and load weights uses logic from core/utils.py
+    # 1. build model and load weights
     try:
         model = load_nas_model(GENOME_FILE, weights_path=WEIGHTS_FILE, device='cpu')
         print("model built and weights loaded successfully.")
@@ -98,6 +98,7 @@ def main():
     for ax in axs.flat: ax.axis('off')
     plt.tight_layout()
 
+    os.makedirs("outputs", exist_ok=True)
     plt.savefig(OUTPUT_FILENAME, dpi=150)
     print(f"prediction saved to {OUTPUT_FILENAME}")
 
