@@ -54,6 +54,45 @@ def get_folding_factor(channels, limit):
         if channels % i == 0: return i
     return 1
 
+def build_folding_config(mw, config_path):
+    """
+    builds and saves auto folding config for all MVAU layers.
+    conservative pe/simd targets to avoid hls unroll explosion and lut overuse.
+
+    :param mw: finn ir model wrapper (post step_convert_to_hw).
+    :param config_path: path to write folding json.
+    """
+    folding = {"Defaults": {"ram_style": "auto"}}
+    mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")]
+
+    for i, node in enumerate(mvau_nodes):
+        name = f"MVAU_hls_{i}"
+        w = mw.get_initializer(node.input[1]) # weights
+        if w is None: continue
+
+        fan_in       = w.shape[0] # width controls SIMD (memory)
+        out_channels = w.shape[1] # height controls PE (compute)
+
+        # baseline targets (conservative to avoid hls unroll explosion and lut overuse)
+        pe_target   = 4
+        simd_target = 4
+
+        # throttle if input has fewer channels than target
+        if fan_in < 8:           simd_target = fan_in
+
+        # further throttle for very large fan_in / out_channels to save LUTs
+        if fan_in >= 256:        simd_target = 2
+        if out_channels >= 128:  pe_target = 2
+
+        # parallelism must divide dimensions evenly
+        pe   = get_folding_factor(out_channels, pe_target)
+        simd = get_folding_factor(fan_in, simd_target)
+
+        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled"}
+
+    with open(config_path, "w") as f: json.dump(folding, f, indent=2)
+
+
 def estimate_performance(model, build_name="finn_eval"):
     """
     estimate performance of hardware model using FINN compiler (FPS, LUTs, bRAM).
@@ -95,43 +134,9 @@ def estimate_performance(model, build_name="finn_eval"):
         print(f"graph prep failed: {e}")
         return None
 
-    # 2. auto folding logic
-    folding = {"Defaults": {"ram_style": "auto"}}
-    mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")] # hardware units
-
-    for i, node in enumerate(mvau_nodes):
-        name = f"MVAU_hls_{i}"
-        w = mw.get_initializer(node.input[1]) # weights
-        if w is None: continue
-
-        # shape extraction from weights
-        fan_in       = w.shape[0] # width controls SIMD (memory)
-        out_channels = w.shape[1] # height controls PE (compute)
-
-        # --- auto logic ---
-
-        # baseline targets (conservative to avoid hls unroll explosion and lut overuse)
-        pe_target   = 4
-        simd_target = 4
-
-        # check: input layer
-        # throttle if input has fewer channels than target and lower SIMD to match
-        if fan_in < 8:           simd_target = fan_in
-
-        # check: big layers
-        # further throttle for very large fan_in / out_channels to save LUTs
-        if fan_in >= 256:        simd_target = 2
-        if out_channels >= 128:  pe_target = 2
-
-        # match check: parallelism needs to divide dimensions evenly
-        pe   = get_folding_factor(out_channels, pe_target)
-        simd = get_folding_factor(fan_in, simd_target)
-
-        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled"}
-
-    # 3. build and estimate
+    # 2. build folding config
     config_path = os.path.join(build_dir, "auto_config.json")
-    with open(config_path, "w") as f: json.dump(folding, f, indent=2)
+    build_folding_config(mw, config_path)
 
     cfg = DataflowBuildConfig(
         output_dir=build_dir, board=TARGET_BOARD,

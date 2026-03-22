@@ -15,7 +15,7 @@ os.environ["FINN_RTLLIB"]   = "/home/max/finn-plus/finn-rtllib"
 
 sys.path.append("..")
 from core.utils import load_nas_model
-from core.hardware import export_to_qonnx, get_folding_factor, TARGET_BOARD, TARGET_FPGA, TARGET_CLOCK
+from core.hardware import export_to_qonnx, build_folding_config, TARGET_BOARD, TARGET_FPGA, TARGET_CLOCK
 
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg
@@ -73,7 +73,7 @@ def synthesize_performance(model, build_name="finn_synth"):
     if not export_to_qonnx(model, onnx_file):
         return None
 
-    # --- auto folding (identical to estimate_performance) ---
+    # --- auto folding: prepare FINN IR, then build config via core/hardware.py ---
     mw = ModelWrapper(onnx_file)
     cfg_temp = DataflowBuildConfig(
         output_dir=build_dir,
@@ -91,32 +91,8 @@ def synthesize_performance(model, build_name="finn_synth"):
         print(f"graph prep failed: {e}")
         return None
 
-    folding = {"Defaults": {"ram_style": "auto"}}
-    mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")]
-
-    for i, node in enumerate(mvau_nodes):
-        name = f"MVAU_hls_{i}"
-        w = mw.get_initializer(node.input[1])
-        if w is None: continue
-
-        fan_in       = w.shape[0]
-        out_channels = w.shape[1]
-
-        pe_target   = 4
-        simd_target = 4
-
-        if fan_in < 8:           simd_target = fan_in
-        if fan_in >= 256:        simd_target = 2
-        if out_channels >= 128:  pe_target = 2
-
-        pe   = get_folding_factor(out_channels, pe_target)
-        simd = get_folding_factor(fan_in, simd_target)
-
-        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled"}
-
     config_path = os.path.join(build_dir, "auto_config.json")
-    with open(config_path, "w") as f:
-        json.dump(folding, f, indent=2)
+    build_folding_config(mw, config_path)
 
     # --- synthesis output targets ---
     outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
