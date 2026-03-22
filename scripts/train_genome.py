@@ -1,10 +1,8 @@
+import os
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import os
-import sys
 
-sys.path.append("..")
 from core.models import load_nas_model
 from core.training import train_model
 from core.dataset import GraspNetHeatmapDataset

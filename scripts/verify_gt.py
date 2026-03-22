@@ -1,8 +1,6 @@
-import sys
 import os
 import matplotlib.pyplot as plt
 
-sys.path.append("..")
 from core.dataset import GraspNetHeatmapDataset
 
 # --- settings

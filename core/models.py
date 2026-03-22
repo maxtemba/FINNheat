@@ -88,11 +88,6 @@ class NAS_GHM_Model(nn.Module):
 
 
 def load_nas_model(genome_path, weights_path=None, device='cpu'):
-    """
-    creates a model from a genome with optional with weight.
-    :return pytorch model.
-    """
-
     # 1. load genome
     if not os.path.exists(genome_path):
         raise FileNotFoundError(f"genome file not found at {genome_path}")

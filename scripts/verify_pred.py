@@ -1,9 +1,7 @@
-import sys
 import os
 import torch
 import matplotlib.pyplot as plt
 
-sys.path.append("..")
 from core.models import load_nas_model
 from core.dataset import GraspNetHeatmapDataset
 

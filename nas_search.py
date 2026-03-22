@@ -65,7 +65,7 @@ def evaluate_fitness(genome, loader, generation, individual_id):
     )
 
     if not fits_hardware:
-        print(f"      -> ❌ HARDWARE OVERFLOW | LUT: {lut_usage:.0f} (Max {HARDWARE_LIMITS['LUT']}) | BRAM: {bram_usage} (Max {HARDWARE_LIMITS['BRAM']})")
+        print(f"      -> HARDWARE OVERFLOW | LUT: {lut_usage:.0f} (Max {HARDWARE_LIMITS['LUT']}) | BRAM: {bram_usage} (Max {HARDWARE_LIMITS['BRAM']})")
         return 0, hw_metrics['fps'], 999, params_m, lut_usage, bram_usage
 
     # 3. proxy train
@@ -86,7 +86,7 @@ def evaluate_fitness(genome, loader, generation, individual_id):
     fps = hw_metrics['fps']
     fitness = calculate_fitness(loss, fps, params_m)
 
-    print(f"      -> ✅ Valid | FPS:{fps:.0f} | LUT:{lut_usage/1000:.1f}k | BRAM:{bram_usage} | loss:{loss:.3f} | score:{fitness:.4f}")
+    print(f"      -> Valid | FPS:{fps:.0f} | LUT:{lut_usage/1000:.1f}k | BRAM:{bram_usage} | loss:{loss:.3f} | score:{fitness:.4f}")
     return fitness, fps, loss, params_m, lut_usage, bram_usage
 
 
@@ -129,7 +129,7 @@ if __name__ == "__main__":
                 best_ever_fitness = fit
                 best_ever_genome = genome
                 with open("genomes/best_nas_genome.txt", "w") as f: f.write(str(genome))
-                print("      🌟 new GLOBAL BEST saved.")
+                print("      new global best saved.")
 
         scored_pop.sort(key=lambda x: x[0], reverse=True)
         print(f"   gen {gen+1} top score: {scored_pop[0][0]:.4f}")

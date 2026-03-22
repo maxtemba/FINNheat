@@ -1,7 +1,5 @@
-import sys
 import os
 
-sys.path.append("..")
 from core.export import export_to_qonnx
 from core.models import load_nas_model
 

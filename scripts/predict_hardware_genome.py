@@ -5,7 +5,6 @@ import os
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
-sys.path.append("..")
 from core.hardware import estimate_performance
 from core.models import load_nas_model
 
