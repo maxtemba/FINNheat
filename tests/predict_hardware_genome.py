@@ -1,6 +1,10 @@
 import sys
 import os
 
+# Initialize FINN+ settings before any FINN imports
+from finn.util.settings import initialize_dummy_settings
+initialize_dummy_settings()
+
 sys.path.append("..")
 from core.hardware import estimate_performance
 from core.utils import load_nas_model

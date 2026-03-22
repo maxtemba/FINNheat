@@ -110,19 +110,18 @@ def estimate_performance(model, build_name="finn_eval"):
 
         # --- auto logic ---
 
-        # baseline targets
-        pe_target   = 16
-        simd_target = 8
+        # baseline targets (conservative to avoid hls unroll explosion and lut overuse)
+        pe_target   = 4
+        simd_target = 4
 
         # check: input layer
         # throttle if input has fewer channels than target and lower SIMD to match
-        if fan_in < 8: simd_target = fan_in
+        if fan_in < 8:           simd_target = fan_in
 
         # check: big layers
-        # throttle for big layers (>=128) to save LUTs/BRAM
-        # 64 channel layers run full speed (PE 16)
-        if out_channels >= 128: pe_target = 8
-        if fan_in       >= 128: simd_target = 4
+        # further throttle for very large fan_in / out_channels to save LUTs
+        if fan_in >= 256:        simd_target = 2
+        if out_channels >= 128:  pe_target = 2
 
         # match check: parallelism needs to divide dimensions evenly
         pe   = get_folding_factor(out_channels, pe_target)
