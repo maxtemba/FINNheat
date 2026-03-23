@@ -26,7 +26,7 @@ BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
 
 # limits
-MAX_BATCHES = 5000  # none for full dataset
+MAX_BATCHES = 500  # none for full dataset
 
 def main():
     print(f"starting training on {DEVICE}")
