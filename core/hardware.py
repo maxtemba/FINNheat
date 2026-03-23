@@ -2,6 +2,9 @@ import os
 import json
 import shutil
 
+from finn.util.settings import initialize_dummy_settings
+initialize_dummy_settings()
+
 from core.export import export_to_qonnx
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg

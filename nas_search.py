@@ -1,9 +1,9 @@
+import os
 import numpy as np
 import torch
 import torch.optim as optim
 import random
 import copy
-import shutil
 import csv
 from torch.utils.data import DataLoader, Subset
 
@@ -16,6 +16,8 @@ from core.evolution import random_genome, mutate, crossover, calculate_fitness
 
 # --- setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if DEVICE.type == 'cuda':
+    torch.backends.cudnn.benchmark = True
 POPULATION_SIZE = 20
 GENERATIONS = 400
 ELITISM = 2
@@ -44,9 +46,6 @@ def evaluate_fitness(genome, loader, generation, individual_id):
     # 2. hardware estimation
     build_tag = f"gen{generation}_id{individual_id}"
     hw_metrics = estimate_performance(model, build_name=build_tag)
-
-    # clean up
-    shutil.rmtree(os.path.join("builds", f"build_{build_tag}"), ignore_errors=True)
 
     # filter 1: estimator failure
     if not hw_metrics or hw_metrics['fps'] == 0:
@@ -92,10 +91,12 @@ def evaluate_fitness(genome, loader, generation, individual_id):
 
 # --- main loop
 if __name__ == "__main__":
-    full_ds = GraspNetHeatmapDataset("data/graspnet", camera='kinect', downsample_factor=8)
+    img_cache = "data/graspnet_img_cache" if os.path.exists("data/graspnet_img_cache") else None
+    full_ds = GraspNetHeatmapDataset("data/graspnet", camera='kinect', downsample_factor=8, img_cache_dir=img_cache)
     indices = list(range(len(full_ds)))
     random.shuffle(indices)
-    search_loader = DataLoader(Subset(full_ds, indices[:1000]), batch_size=4, shuffle=True)
+    search_loader = DataLoader(Subset(full_ds, indices[:1000]), batch_size=4, shuffle=True,
+                               num_workers=4, pin_memory=True, persistent_workers=True)
 
     population = [random_genome() for _ in range(POPULATION_SIZE)]
     print(f"initialized {POPULATION_SIZE} models.")
