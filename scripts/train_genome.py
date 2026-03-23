@@ -12,10 +12,11 @@ from core.dataset import GraspNetHeatmapDataset
 GENOME_FILE = "../genomes/best_genome.txt"
 SAVE_PATH   = "outputs/trained_model.pth"
 DATA_PATH   = "../data/graspnet"
+IMG_CACHE   = "../data/graspnet_img_cache"
 
 # hardware
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_WORKERS = 4
+NUM_WORKERS = 8
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 
@@ -45,7 +46,7 @@ def main():
         return
 
     try:
-        ds = GraspNetHeatmapDataset(DATA_PATH, camera='kinect', downsample_factor=8)
+        ds = GraspNetHeatmapDataset(DATA_PATH, camera='kinect', downsample_factor=8, img_cache_dir=IMG_CACHE)
         loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, persistent_workers=True)
     except Exception as e:
         print(f"error loading dataset: {e}")

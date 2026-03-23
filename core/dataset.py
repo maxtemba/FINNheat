@@ -13,11 +13,12 @@ class GraspNetHeatmapDataset(Dataset):
     clean pytorch dataset for graspnet.
     handles file indexing, resizing, and hggd ground truth generation.
     """
-    def __init__(self, root, camera='kinect', downsample_factor=8):
+    def __init__(self, root, camera='kinect', downsample_factor=8, img_cache_dir=None):
         self.root = root
         self.camera = camera
         self.factor = downsample_factor
         self.hw = (360, 640) # target input size (h, w)
+        self.img_cache_dir = img_cache_dir
 
         # physics engine for heatmaps
         self.generator = HeatmapGenerator(
@@ -35,9 +36,14 @@ class GraspNetHeatmapDataset(Dataset):
     def __getitem__(self, idx):
         rgb_path, depth_path, label_path = self.files[idx]
 
-        # 1. load and resize images
-        rgb, h_old, w_old = self._load_img(rgb_path, is_depth=False)
-        depth, _, _       = self._load_img(depth_path, is_depth=True)
+        # 1. load and resize images (from npy cache if available)
+        if self.img_cache_dir is not None:
+            rgb   = np.load(os.path.join(self.img_cache_dir, f"{idx:06d}_r.npy")).astype(np.float32) / 255.0
+            depth = np.load(os.path.join(self.img_cache_dir, f"{idx:06d}_d.npy")).astype(np.float32) / 1000.0
+            h_old, w_old = self.hw
+        else:
+            rgb, h_old, w_old = self._load_img(rgb_path, is_depth=False)
+            depth, _, _       = self._load_img(depth_path, is_depth=True)
 
         # 2. combine to input tensor [4, H, W]
         rgbd = np.concatenate([rgb, depth[..., None]], axis=-1)

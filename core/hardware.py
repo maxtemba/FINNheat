@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 
 from core.export import export_to_qonnx
 from qonnx.core.modelwrapper import ModelWrapper
@@ -19,7 +20,7 @@ from finn.builder.build_dataflow_steps import (
 # --- config
 TARGET_BOARD = "KV260_SOM"
 TARGET_FPGA  = "xck26-sfvc784-2LV-c"
-TARGET_CLOCK = 4.0   # 250 MHz
+TARGET_CLOCK = 4.44  # ~225 MHz
 
 
 def get_folding_factor(channels, limit):
@@ -54,7 +55,7 @@ def build_folding_config(mw, config_path):
         fan_in       = w.shape[0] # width controls SIMD (memory)
         out_channels = w.shape[1] # height controls PE (compute)
 
-        # pe=4 simd=4 for higher throughput; clock relaxed to 250 MHz for timing closure
+        # pe=4 simd=4 for higher throughput; clock relaxed to 225 MHz for timing closure
         pe_target   = 4
         simd_target = 4
 
@@ -62,7 +63,7 @@ def build_folding_config(mw, config_path):
         pe   = get_folding_factor(out_channels, pe_target)
         simd = get_folding_factor(fan_in, simd_target)
 
-        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled"}
+        folding[name] = {"PE": int(pe), "SIMD": int(simd), "mem_mode": "internal_decoupled", "resType": "dsp"}
 
     with open(config_path, "w") as f: json.dump(folding, f, indent=2)
 
@@ -149,16 +150,19 @@ def estimate_performance(model, build_name="finn_eval"):
 
         total = res_res.get("total", {})
 
-        return {
+        result = {
             "fps":     res_perf.get("estimated_throughput_fps", 0),
             "latency": res_perf.get("critical_path_cycles", 0),
             "lut":     total.get("LUT", 0),
             "bram":    total.get("BRAM_18K", 0),
             "dsp":     total.get("DSP", 0)
         }
+        shutil.rmtree(build_dir, ignore_errors=True)
+        return result
 
     except Exception as e:
         print(f"estimation failed: {e}")
+        shutil.rmtree(build_dir, ignore_errors=True)
         return None
 
 
@@ -236,7 +240,7 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
         fmax = ooc.get("fmax_mhz", None)
         clk  = round(1000.0 / fmax, 3) if fmax else TARGET_CLOCK
 
-        return {
+        result = {
             "fps_estimate":  est_fps,
             "lut":           ooc.get("LUT", 0),
             "lut_ram":       ooc.get("LUTRAM", 0),
@@ -246,7 +250,12 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
             "timing_wns_ns": wns,
             "clk_period_ns": clk,
         }
+        shutil.rmtree(build_dir, ignore_errors=True)
+        shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
+        return result
 
     except Exception as e:
         print(f"synthesis failed: {e}")
+        shutil.rmtree(build_dir, ignore_errors=True)
+        shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
         return None
