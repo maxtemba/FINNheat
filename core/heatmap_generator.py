@@ -24,6 +24,7 @@ class HeatmapGenerator:
         self.theta_range = np.pi
         self.anchor_step = self.theta_range / self.num_angles
 
+
     def generate_ground_truth(self, grasps_raw):
         """
         transforms raw grasp list into dense heatmaps.
