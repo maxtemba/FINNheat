@@ -16,10 +16,12 @@ DATA_PATH   = "../data/graspnet"
 # hardware
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 4
+if DEVICE.type == 'cuda':
+    torch.backends.cudnn.benchmark = True
 
 # hyperparameters
 EPOCHS = 10
-BATCH_SIZE = 4
+BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
 
 # limits
@@ -44,7 +46,7 @@ def main():
 
     try:
         ds = GraspNetHeatmapDataset(DATA_PATH, camera='kinect', downsample_factor=8)
-        loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+        loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, persistent_workers=True)
     except Exception as e:
         print(f"error loading dataset: {e}")
         return

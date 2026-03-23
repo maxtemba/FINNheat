@@ -2,6 +2,7 @@ import os
 import csv
 import torch
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 
 def hggd_loss(preds, targets, device):
     """
@@ -58,6 +59,8 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
 
     model.train()
     best_loss = float('inf')
+    use_amp = device.type == 'cuda'
+    scaler = GradScaler('cuda', enabled=use_amp)
 
     # console logging
     mode = "training" if save_path else "proxy search"
@@ -80,17 +83,20 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
             except StopIteration:
                 break
 
-            x = x.to(device)
-            targets = [t.to(device) for t in targets]
+            x = x.to(device, non_blocking=True)
+            targets = [t.to(device, non_blocking=True) for t in targets]
 
-            optimizer.zero_grad()
-            preds = model(x)
-            loss = hggd_loss(preds, targets, device)
-            loss.backward()
+            optimizer.zero_grad(set_to_none=True)
+            with autocast('cuda', enabled=use_amp):
+                preds = model(x)
+                loss = hggd_loss(preds, targets, device)
+            scaler.scale(loss).backward()
 
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
             count += 1
