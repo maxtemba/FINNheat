@@ -26,7 +26,8 @@ class GraspNetHeatmapDataset(Dataset):
             anchor_w=50.0, anchor_z=20.0, sigma=10
         )
 
-        # build file index once
+        # build file index once (also populates self.scene_of)
+        self.scene_of = []
         self.files = self._build_index()
         print(f"found {len(self.files)} valid pairs for camera '{camera}'")
 
@@ -63,6 +64,19 @@ class GraspNetHeatmapDataset(Dataset):
 
     # --- helper methods ---
 
+    def get_scene_splits(self, train_frac=0.8, seed=42):
+        """splits dataset indices by scene to prevent data leakage between train and val."""
+        rng = np.random.default_rng(seed)
+        scene_arr   = np.array(self.scene_of)
+        unique_scenes = np.unique(scene_arr)
+        rng.shuffle(unique_scenes)
+        n_train = max(1, int(len(unique_scenes) * train_frac))
+        train_scenes = set(unique_scenes[:n_train].tolist())
+        val_scenes   = set(unique_scenes[n_train:].tolist())
+        train_idx = [i for i, s in enumerate(scene_arr) if s in train_scenes]
+        val_idx   = [i for i, s in enumerate(scene_arr) if s in val_scenes]
+        return train_idx, val_idx
+
     def _build_index(self):
         """scans directories to match rgb, depth, and label files."""
         valid = []
@@ -74,7 +88,7 @@ class GraspNetHeatmapDataset(Dataset):
         # find all scene folders
         scenes = sorted([d for d in os.listdir(base_lbl) if os.path.isdir(os.path.join(base_lbl, d))])
 
-        for s_id in scenes:
+        for s_idx, s_id in enumerate(scenes):
             try:
                 # scene_0000 -> 0
                 s_num = int(s_id.split('_')[-1])
@@ -102,6 +116,7 @@ class GraspNetHeatmapDataset(Dataset):
 
                 if all(os.path.exists(p) for p in paths):
                     valid.append(paths)
+                    self.scene_of.append(s_idx)
         return valid
 
     def _load_img(self, path, is_depth):

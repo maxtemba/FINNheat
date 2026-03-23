@@ -40,7 +40,7 @@ def hggd_loss(preds, targets, device):
     return loss_loc + loss_reg
 
 
-def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10, generation=None, log_csv=None):
+def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10, generation=None, log_csv=None, val_loader=None):
     """
     main training loop that both handles fast NAS proxy training and full training.
 
@@ -107,21 +107,40 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
         # --- finished epoch
         avg_loss = total_loss / count if count > 0 else 999.0
 
+        if epochs > 1:
+            print(f"train loss: {avg_loss:.4f}")
+
+        # --- validation
+        val_loss = None
+        if val_loader is not None:
+            model.eval()
+            val_total, val_count = 0, 0
+            with torch.no_grad():
+                for x_v, targets_v in val_loader:
+                    x_v = x_v.to(device, non_blocking=True)
+                    targets_v = [t.to(device, non_blocking=True) for t in targets_v]
+                    with autocast('cuda', enabled=use_amp):
+                        preds_v = model(x_v)
+                        loss_v  = hggd_loss(preds_v, targets_v, device)
+                    val_total += loss_v.item()
+                    val_count += 1
+            val_loss = val_total / val_count if val_count > 0 else 999.0
+            model.train()
+            print(f"val loss:   {val_loss:.4f}")
+
         # csv logging
-        if log_csv and generation is not None:
+        if log_csv:
             file_exists = os.path.isfile(log_csv)
             with open(log_csv, mode='a', newline='') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    writer.writerow(['generation', 'epoch', 'avg_loss'])
-                writer.writerow([generation, epoch + 1, avg_loss])
+                    writer.writerow(['generation', 'epoch', 'train_loss', 'val_loss'])
+                writer.writerow([generation, epoch + 1, avg_loss, val_loss])
 
-        if epochs > 1:
-            print(f"avg loss: {avg_loss:.4f}")
-
-        # checks for best model
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        # save on best monitored loss (val if available, else train)
+        monitor = val_loss if val_loss is not None else avg_loss
+        if monitor < best_loss:
+            best_loss = monitor
             if save_path:
                 torch.save(model.state_dict(), save_path)
                 print(f"saved best model to {save_path}")

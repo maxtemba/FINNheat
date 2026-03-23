@@ -11,7 +11,7 @@ WEIGHTS_FILE = "outputs/trained_model.pth"
 GRASPNET_ROOT = "../data/graspnet"
 
 # --- settings
-IMG_INDEX = 3000
+IMG_INDEX = 2000
 CAMERA = 'kinect'
 OUTPUT_FILENAME = f"outputs/prediction_{IMG_INDEX}.png"
 

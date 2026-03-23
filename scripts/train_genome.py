@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from core.models import load_nas_model
 from core.training import train_model
@@ -21,12 +21,13 @@ if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 
 # hyperparameters
-EPOCHS = 10
-BATCH_SIZE = 16
+EPOCHS = 30
+BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
+TRAIN_SPLIT = 0.8  # fraction of scenes used for training
 
 # limits
-MAX_BATCHES = 500  # none for full dataset
+MAX_BATCHES = None  # full dataset
 
 def main():
     print(f"starting training on {DEVICE}")
@@ -47,7 +48,15 @@ def main():
 
     try:
         ds = GraspNetHeatmapDataset(DATA_PATH, camera='kinect', downsample_factor=8, img_cache_dir=IMG_CACHE)
-        loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, persistent_workers=True)
+
+        # split by scene to prevent data leakage
+        train_idx, val_idx = ds.get_scene_splits(train_frac=TRAIN_SPLIT)
+        print(f"train: {len(train_idx)} samples | val: {len(val_idx)} samples")
+
+        loader     = DataLoader(Subset(ds, train_idx), batch_size=BATCH_SIZE, shuffle=True,
+                                num_workers=NUM_WORKERS, pin_memory=True, persistent_workers=True)
+        val_loader = DataLoader(Subset(ds, val_idx),   batch_size=BATCH_SIZE, shuffle=False,
+                                num_workers=NUM_WORKERS, pin_memory=True, persistent_workers=True)
     except Exception as e:
         print(f"error loading dataset: {e}")
         return
@@ -64,7 +73,8 @@ def main():
         save_path=SAVE_PATH,
         max_batches=MAX_BATCHES,
         print_every=0,
-        log_csv="training_log.csv"
+        log_csv="training_log.csv",
+        val_loader=val_loader
     )
 
 if __name__ == "__main__":
