@@ -19,7 +19,7 @@ from finn.builder.build_dataflow_steps import (
 # --- config
 TARGET_BOARD = "KV260_SOM"
 TARGET_FPGA  = "xck26-sfvc784-2LV-c"
-TARGET_CLOCK = 3.33  # 300 MHz
+TARGET_CLOCK = 4.0   # 250 MHz
 
 
 def get_folding_factor(channels, limit):
@@ -54,9 +54,9 @@ def build_folding_config(mw, config_path):
         fan_in       = w.shape[0] # width controls SIMD (memory)
         out_channels = w.shape[1] # height controls PE (compute)
 
-        # minimal parallelism: pe=1 simd=1 guaranteed to clear hls and fit on device
-        pe_target   = 1
-        simd_target = 1
+        # pe=4 simd=4 for higher throughput; clock relaxed to 250 MHz for timing closure
+        pe_target   = 4
+        simd_target = 4
 
         # parallelism must divide dimensions evenly
         pe   = get_folding_factor(out_channels, pe_target)
@@ -188,7 +188,7 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
     if not onnx_file:
         return None
 
-    outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
+    outputs = [DataflowOutputType.ESTIMATE_REPORTS, DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
     if generate_bitfile:
         outputs.append(DataflowOutputType.BITFILE)
 
