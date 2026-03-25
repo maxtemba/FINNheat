@@ -1,4 +1,5 @@
 import os
+import shutil
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
@@ -6,11 +7,13 @@ from torch.utils.data import DataLoader, Subset
 from core.models import load_nas_model
 from core.training import train_model
 from core.dataset import GraspNetHeatmapDataset
+from verify_training import save_prediction
 
 # --- settings
 # paths (relative to scripts/ folder)
-GENOME_FILE = "../genomes/best_genome.txt"
-SAVE_PATH   = "outputs/trained_model.pth"
+GENOME_FILE = "../genomes/hybrid_genome.txt"
+SAVE_PATH        = "outputs/hybrid_model.pth"
+SAVE_GENOME_PATH = "outputs/hybrid_genome.txt"
 DATA_PATH   = "../data/graspnet"
 IMG_CACHE   = "../data/graspnet_img_cache"
 
@@ -21,8 +24,8 @@ if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 
 # hyperparameters
-EPOCHS = 30
-BATCH_SIZE = 8
+EPOCHS = 40
+BATCH_SIZE = 12
 LEARNING_RATE = 1e-4
 TRAIN_SPLIT = 0.8  # fraction of scenes used for training
 
@@ -32,6 +35,9 @@ MAX_BATCHES = None  # full dataset
 def main():
     print(f"starting training on {DEVICE}")
     os.makedirs("outputs", exist_ok=True)
+
+    # snapshot genome so weights and architecture always stay in sync
+    shutil.copy(GENOME_FILE, SAVE_GENOME_PATH)
 
     # 1. build model and load weights
     try:
@@ -62,7 +68,10 @@ def main():
         return
 
     # 3. train
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+
+    heatmap_cb = lambda m, ep: save_prediction(m, ds, 3000, ep, "outputs/heatmaps", DEVICE)
 
     train_model(
         model=model,
@@ -74,7 +83,9 @@ def main():
         max_batches=MAX_BATCHES,
         print_every=0,
         log_csv="training_log.csv",
-        val_loader=val_loader
+        val_loader=val_loader,
+        scheduler=scheduler,
+        heatmap_callback=heatmap_cb
     )
 
 if __name__ == "__main__":
