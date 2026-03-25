@@ -100,6 +100,11 @@ def load_nas_model(genome_path, weights_path=None, device='cpu'):
     # 2. build model
     try:
         model = NAS_GHM_Model(genome).to(device)
+        # init heatmap bias to -log((1-0.01)/0.01) so initial predictions are ~0.01
+        # prevents focal loss from wasting epochs pushing background to near-zero
+        for head in [model.head_loc, model.head_cls]:
+            if hasattr(head, 'bias') and head.bias is not None:
+                torch.nn.init.constant_(head.bias, -4.59)
     except Exception as e:
         raise RuntimeError(f"failed to build model from genome: {e}")
 
