@@ -47,8 +47,8 @@ def crossover(g1, g2):
     return child
 
 def calculate_fitness(loss, fps, params_m):
-    """fitness = accuracy * efficiency"""
+    """fitness = accuracy^2 * efficiency (accuracy-weighted)"""
     accuracy_score = 1.0 / (loss + 1e-6)
     param_factor = 10.0 / np.log(params_m + 2.0)
     efficiency_score = fps * param_factor
-    return accuracy_score * efficiency_score
+    return (accuracy_score ** 2) * efficiency_score
