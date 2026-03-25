@@ -12,24 +12,33 @@ from core.training import train_model
 from core.hardware import estimate_performance
 from core.dataset import GraspNetHeatmapDataset
 from core.evolution import random_genome, mutate, crossover, calculate_fitness
+from core.predictor import load_predictor, apply_calibration
 
 # --- setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 POPULATION_SIZE = 20
-GENERATIONS = 400
-ELITISM = 2
-TRAIN_BATCHES = 20
-TRAIN_EPOCHS = 3
+GENERATIONS     = 60
+ELITISM         = 2
+TRAIN_BATCHES   = 100
+TRAIN_EPOCHS    = 5
 LOG_FILE = "nas_search_log.csv"
 
-# --- hardware contains (Kria KV260)
+# --- hardware limits (Kria KV260)
+# no explicit margin — calibrated predictor already overpredicts fitting designs by ~5-10%,
+# which acts as an implicit safety buffer without making the search space empty
 HARDWARE_LIMITS = {
     "LUT":  117120,
     "BRAM": 288,
-    "DSP":  1248
+    "DSP":  1248,
 }
+
+hw_predictor = load_predictor("scripts/outputs/hw_predictor.pkl")
+if hw_predictor:
+    print(f"loaded calibrated hw predictor (trained on {hw_predictor['n_train']} runs)")
+else:
+    print("no hw predictor found — using raw finn estimates")
 
 def evaluate_fitness(genome, loader, generation, individual_id):
     print(f"   Testing Genome {individual_id}...")
@@ -52,9 +61,17 @@ def evaluate_fitness(genome, loader, generation, individual_id):
         return 0, 0, 999, params_m, 0, 0
 
     # filter 2: hardware constraints
-    lut_usage = hw_metrics['lut']
-    bram_usage = hw_metrics['bram']
-    dsp_usage = hw_metrics['dsp']
+    if hw_predictor:
+        cal = apply_calibration(hw_predictor, genome, hw_metrics)
+        lut_usage  = cal['lut']  if cal else hw_metrics['lut']
+        bram_usage = cal['bram'] if cal else hw_metrics['bram']
+        dsp_usage  = cal['dsp']  if cal else hw_metrics['dsp']
+        hw_label   = "(cal)" if cal else "(est)"
+    else:
+        lut_usage  = hw_metrics['lut']
+        bram_usage = hw_metrics['bram']
+        dsp_usage  = hw_metrics['dsp']
+        hw_label   = "(est)"
 
     fits_hardware = (
             lut_usage <= HARDWARE_LIMITS['LUT'] and
@@ -63,11 +80,11 @@ def evaluate_fitness(genome, loader, generation, individual_id):
     )
 
     if not fits_hardware:
-        print(f"      -> HARDWARE OVERFLOW | LUT: {lut_usage:.0f} (Max {HARDWARE_LIMITS['LUT']}) | BRAM: {bram_usage} (Max {HARDWARE_LIMITS['BRAM']})")
+        print(f"      -> HARDWARE OVERFLOW {hw_label} | LUT: {lut_usage:.0f} (Max {HARDWARE_LIMITS['LUT']}) | BRAM: {bram_usage} (Max {HARDWARE_LIMITS['BRAM']})")
         return 0, hw_metrics['fps'], 999, params_m, lut_usage, bram_usage
 
     # 3. proxy train
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
     loss = train_model(
         model=model,
