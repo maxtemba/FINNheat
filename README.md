@@ -63,7 +63,10 @@ Download the dataset and extract it into `data/graspnet/`:
 
 ```bash
 # download
-wget -O data.zip (https://drive.google.com/file/d/1X_AsrJATRUNVhH69INLyhjL6vRsqPa-L/view?usp=drive_link)
+FILE_ID=1X_AsrJATRUNVhH69INLyhjL6vRsqPa-L
+
+wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate \"https://docs.google.com/uc?export=download&id=${FILE_ID}\" -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1/p')&id=${FILE_ID}" -O data.zip && rm -rf /tmp/cookies.txt
+
 unzip data.zip -d data/
 ```
 
