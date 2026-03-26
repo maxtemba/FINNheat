@@ -63,7 +63,7 @@ Download the dataset and extract it into `data/graspnet/`:
 
 ```bash
 # download
-wget -O data.zip "https://YOUR_GOOGLE_DRIVE_LINK_HERE"
+wget -O data.zip [https://YOUR_GOOGLE_DRIVE_LINK_HERE](https://drive.google.com/file/d/1X_AsrJATRUNVhH69INLyhjL6vRsqPa-L/view?usp=drive_link)
 unzip data.zip -d data/
 ```
 
@@ -186,4 +186,4 @@ Each architecture is a dict with 7 parameters:
 | LUTs     | 117,120 |
 | BRAMs    | 288 (18K) |
 | DSPs     | 1,248 |
-| Clock    | 300 MHz |
+| Clock    | 225 MHz |
