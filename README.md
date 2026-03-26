@@ -4,14 +4,78 @@ FINN-Heat is a Neural Architecture Search (NAS) pipeline that evolves quantized 
 
 ## Setup
 
-This project requires the `finn-plus` conda environment. Do **not** use pip or a venv.
+**Requirements:** Ubuntu 22.04, Python 3.10, Xilinx Vivado/Vitis HLS 2024.2
+
+### 1. Install Miniforge (conda)
 
 ```bash
+wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+bash Miniforge3-Linux-x86_64.sh
+```
+
+### 2. Create the Python environment
+
+```bash
+conda create -n finn-plus python=3.10 -y
 conda activate finn-plus
 ```
 
-Xilinx Vivado/Vitis 2024.2 must be installed at `/tools/Xilinx/`.
-GraspNet dataset goes in `data/graspnet/` relative to the project root.
+### 3. Install dependencies
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install brevitas==0.10.2
+pip install finn-plus
+finn deps update
+pip install numpy scikit-learn joblib matplotlib Pillow
+```
+
+### 4. Clone and install this project
+
+```bash
+git clone <your-repo-url>
+cd FINNheat
+pip install -e .
+```
+
+The `-e` install makes `core.*` importable from any script without path hacks.
+
+### 5. Install Vivado/Vitis HLS 2024.2
+
+Download the Xilinx Unified Installer from [xilinx.com](https://www.xilinx.com/support/download.html) and install to `/tools/Xilinx/`. You need at minimum:
+- Vivado 2024.2
+- Vitis HLS 2024.2
+
+### 6. Set environment variables
+
+Add to your `~/.bashrc` (or activate script for the conda env):
+
+```bash
+export XILINX_VIVADO=/tools/Xilinx/Vivado/2024.2
+export VITIS_HLS=/tools/Xilinx/Vitis_HLS/2024.2
+export XILINX_VITIS=/tools/Xilinx/Vitis/2024.2
+export FINN_RTLLIB=/path/to/finn-rtllib   # from the finn package install
+```
+
+### 7. GraspNet dataset
+
+Download the dataset and extract it into `data/graspnet/`:
+
+```bash
+# download
+wget -O data.zip "https://YOUR_GOOGLE_DRIVE_LINK_HERE"
+unzip data.zip -d data/
+```
+
+Expected layout:
+
+```
+FINNheat/
+└── data/
+    └── graspnet/
+        ├── scenes/
+        └── dataset_kinect/
+```
 
 ## Project Structure
 
