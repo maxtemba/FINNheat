@@ -1,4 +1,6 @@
 import os
+import re
+import glob
 import json
 import shutil
 
@@ -26,6 +28,46 @@ TARGET_FPGA  = "xck26-sfvc784-2LV-c"
 TARGET_CLOCK = 4.44  # ~225 MHz
 
 
+def _parse_synth_utilization_rpt():
+    # reads vivado synthesis utilization report from FINN_TMP when ooc synthesis fails
+    # synthesis (synth_1) always completes even on overflow; only impl_1 (place_design) fails
+    # returns {lut, lut_ram, bram, dsp, overflow=True} or None if report not found
+    pattern = os.path.join(
+        os.path.abspath("FINN_TMP"), "synth_out_of_context_*",
+        "results_finn_design_wrapper", "vivadocompile",
+        "vivadocompile.runs", "synth_1",
+        "finn_design_wrapper_utilization_synth.rpt"
+    )
+    matches = glob.glob(pattern)
+    if not matches:
+        return None
+    rpt_path = sorted(matches)[-1]  # most recent if multiple
+    try:
+        with open(rpt_path) as f:
+            text = f.read()
+
+        def parse_row(label):
+            m = re.search(rf'\|\s+{re.escape(label)}\s*\*?\s+\|\s+(\d[\d,]*)', text)
+            return int(m.group(1).replace(",", "")) if m else 0
+
+        lut_logic = parse_row("LUT as Logic")
+        lut_mem   = parse_row("LUT as Memory")
+        ramb36    = parse_row("RAMB36/FIFO")
+        ramb18    = parse_row("RAMB18")
+        dsp       = parse_row("DSPs")
+        print(f"  overflow synth report: lut={lut_logic+lut_mem}  bram={ramb36*2+ramb18}  dsp={dsp}")
+        return {
+            "lut":      lut_logic + lut_mem,
+            "lut_ram":  lut_mem,
+            "bram":     ramb36 * 2 + ramb18,
+            "dsp":      dsp,
+            "overflow": True,
+        }
+    except Exception as e:
+        print(f"failed to parse utilization report: {e}")
+        return None
+
+
 def get_folding_factor(channels, limit):
     """
     finds optimal folding factor for hardware limit.
@@ -39,13 +81,13 @@ def get_folding_factor(channels, limit):
     return 1
 
 
-def build_folding_config(mw, config_path):
+def build_folding_config(mw, config_path, parallelism=2):
     """
     builds and saves auto folding config for all MVAU layers.
-    conservative pe/simd targets to avoid hls unroll explosion and lut overuse.
 
     :param mw: finn ir model wrapper (post step_convert_to_hw).
     :param config_path: path to write folding json.
+    :param parallelism: pe and simd target (best divisor <= this value is used per layer).
     """
     folding = {"Defaults": {"ram_style": "auto"}}
     mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")]
@@ -58,9 +100,8 @@ def build_folding_config(mw, config_path):
         fan_in       = w.shape[0] # width controls SIMD (memory)
         out_channels = w.shape[1] # height controls PE (compute)
 
-        # pe=4 simd=4 for higher throughput; clock relaxed to 225 MHz for timing closure
-        pe_target   = 4
-        simd_target = 4
+        pe_target   = parallelism
+        simd_target = parallelism
 
         # parallelism must divide dimensions evenly
         pe   = get_folding_factor(out_channels, pe_target)
@@ -71,7 +112,7 @@ def build_folding_config(mw, config_path):
     with open(config_path, "w") as f: json.dump(folding, f, indent=2)
 
 
-def _prepare_finn_ir(model, build_dir):
+def _prepare_finn_ir(model, build_dir, parallelism=2):
     # export to qonnx, run ir conversion steps, write folding config
     # returns (onnx_file, config_path) or (None, None) on failure
     onnx_file = os.path.join(build_dir, "model.onnx")
@@ -97,12 +138,12 @@ def _prepare_finn_ir(model, build_dir):
         return None, None
 
     config_path = os.path.join(build_dir, "auto_config.json")
-    build_folding_config(mw, config_path)
+    build_folding_config(mw, config_path, parallelism=parallelism)
 
     return onnx_file, config_path
 
 
-def estimate_performance(model, build_name="finn_eval"):
+def estimate_performance(model, build_name="finn_eval", parallelism=2):
     """
     estimate performance of hardware model using FINN compiler (FPS, LUTs, bRAM).
 
@@ -120,7 +161,7 @@ def estimate_performance(model, build_name="finn_eval"):
 
     print(f"starting hardware estimation for: {build_name}")
 
-    onnx_file, config_path = _prepare_finn_ir(model, build_dir)
+    onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
     if not onnx_file:
         return None
 
@@ -169,7 +210,7 @@ def estimate_performance(model, build_name="finn_eval"):
         return None
 
 
-def synthesize_performance(model, build_name="finn_synth", generate_bitfile=False):
+def synthesize_performance(model, build_name="finn_synth", generate_bitfile=False, parallelism=2):
     """
     run full HLS + OOC synthesis for a model using the FINN compiler.
 
@@ -191,7 +232,7 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
 
     print(f"starting full synthesis for: {build_name}")
 
-    onnx_file, config_path = _prepare_finn_ir(model, build_dir)
+    onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
     if not onnx_file:
         return None
 
@@ -227,7 +268,10 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
 
         if not os.path.exists(ooc_path):
             print(f"synthesis report not found at: {ooc_path}")
-            return None
+            overflow = _parse_synth_utilization_rpt()
+            shutil.rmtree(build_dir, ignore_errors=True)
+            shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
+            return overflow
 
         with open(ooc_path, 'r') as f:
             ooc = json.load(f)
@@ -259,6 +303,7 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
 
     except Exception as e:
         print(f"synthesis failed: {e}")
+        overflow = _parse_synth_utilization_rpt()
         shutil.rmtree(build_dir, ignore_errors=True)
         shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
-        return None
+        return overflow

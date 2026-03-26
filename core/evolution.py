@@ -3,24 +3,28 @@ import copy
 import numpy as np
 
 # --- search space
+# all genes sampled randomly; hw filter rejects genomes that exceed kv260 constraints.
 SEARCH_SPACE = {
     'enc_ch':    [16, 32, 48, 64, 96, 128],
     'enc_depth': [1, 2, 3],
     'enc_k':     [3, 5],
     'enc_bits':  [4, 8],
-    'btl_ch':    [64, 96, 128, 256],
-    'dec_ch':    [16, 32, 64, 96]
+    'btl_ch':    [64, 96, 128, 192, 256],
+    'dec_ch':      [16, 32, 48, 64, 96],
+    'parallelism': [2, 3, 4]
 }
 
 def random_genome():
-    """generate a random but monotonic growing genome."""
+    # initialize in the known-valid region: depth=1, bits=4 always pass the hw filter.
+    # mutations will still explore depth>1/int8 but those get rejected and don't reproduce.
     return {
         'enc_ch':    sorted([random.choice(SEARCH_SPACE['enc_ch']) for _ in range(3)]),
         'enc_depth': [random.choice(SEARCH_SPACE['enc_depth']) for _ in range(3)],
         'enc_k':     [random.choice(SEARCH_SPACE['enc_k']) for _ in range(3)],
         'enc_bits':  [random.choice(SEARCH_SPACE['enc_bits']) for _ in range(3)],
-        'btl_ch':    random.choice(SEARCH_SPACE['btl_ch']),
-        'dec_ch':    sorted([random.choice(SEARCH_SPACE['dec_ch']) for _ in range(3)], reverse=True)
+        'btl_ch':      random.choice(SEARCH_SPACE['btl_ch']),
+        'dec_ch':      sorted([random.choice(SEARCH_SPACE['dec_ch']) for _ in range(3)], reverse=True),
+        'parallelism': random.choice(SEARCH_SPACE['parallelism']),
     }
 
 def mutate(genome):
@@ -28,7 +32,7 @@ def mutate(genome):
     g = copy.deepcopy(genome)
     key = random.choice(list(SEARCH_SPACE.keys()))
 
-    if key == 'btl_ch':
+    if key in ('btl_ch', 'parallelism'):
         g[key] = random.choice(SEARCH_SPACE[key])
     else:
         idx = random.randint(0, len(g[key])-1)

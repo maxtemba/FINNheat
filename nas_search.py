@@ -19,7 +19,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 POPULATION_SIZE = 20
-GENERATIONS     = 60
+GENERATIONS     = 90
 ELITISM         = 2
 TRAIN_BATCHES   = 100
 TRAIN_EPOCHS    = 5
@@ -34,11 +34,14 @@ HARDWARE_LIMITS = {
     "DSP":  1248,
 }
 
-hw_predictor = load_predictor("scripts/outputs/hw_predictor.pkl")
-if hw_predictor:
-    print(f"loaded calibrated hw predictor (trained on {hw_predictor['n_train']} runs)")
-else:
-    print("no hw predictor found — using raw finn estimates")
+hw_predictors = {}
+for _p in [2, 3, 4]:
+    _pred = load_predictor(f"scripts/outputs/predictors/hw_predictor_p{_p}.pkl")
+    if _pred:
+        hw_predictors[_p] = _pred
+        print(f"loaded hw predictor p={_p} (trained on {_pred['n_train']} runs)")
+if not hw_predictors:
+    print("no hw predictors found — using raw finn estimates")
 
 def evaluate_fitness(genome, loader, generation, individual_id):
     print(f"   Testing Genome {individual_id}...")
@@ -52,8 +55,9 @@ def evaluate_fitness(genome, loader, generation, individual_id):
         return 0, 0, 999, 0, 0, 0
 
     # 2. hardware estimation
+    parallelism = genome.get('parallelism', 2)
     build_tag = f"gen{generation}_id{individual_id}"
-    hw_metrics = estimate_performance(model, build_name=build_tag)
+    hw_metrics = estimate_performance(model, build_name=build_tag, parallelism=parallelism)
 
     # filter 1: estimator failure
     if not hw_metrics or hw_metrics['fps'] == 0:
@@ -61,6 +65,7 @@ def evaluate_fitness(genome, loader, generation, individual_id):
         return 0, 0, 999, params_m, 0, 0
 
     # filter 2: hardware constraints
+    hw_predictor = hw_predictors.get(parallelism)
     if hw_predictor:
         cal = apply_calibration(hw_predictor, genome, hw_metrics)
         lut_usage  = cal['lut']  if cal else hw_metrics['lut']
@@ -121,7 +126,7 @@ if __name__ == "__main__":
     with open(LOG_FILE, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['generation', 'id', 'fitness', 'fps', 'loss', 'params', 'lut', 'bram',
-                         'enc_ch', 'enc_depth', 'enc_k', 'enc_bits', 'btl_ch', 'dec_ch'])
+                         'enc_ch', 'enc_depth', 'enc_k', 'enc_bits', 'btl_ch', 'dec_ch', 'parallelism'])
 
     best_ever_fitness = -1
     best_ever_genome = None
@@ -139,7 +144,8 @@ if __name__ == "__main__":
                 writer.writerow([
                     gen + 1, i, fit, fps, loss, params, lut, bram,
                     genome['enc_ch'], genome['enc_depth'], genome['enc_k'],
-                    genome['enc_bits'], genome['btl_ch'], genome['dec_ch']
+                    genome['enc_bits'], genome['btl_ch'], genome['dec_ch'],
+                    genome.get('parallelism', 2)
                 ])
 
             if fit > best_ever_fitness:
