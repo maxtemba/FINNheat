@@ -63,7 +63,7 @@ Download the dataset and extract it into `data/graspnet/`:
 
 ```bash
 # download
-wget -O data.zip [https://YOUR_GOOGLE_DRIVE_LINK_HERE](https://drive.google.com/file/d/1X_AsrJATRUNVhH69INLyhjL6vRsqPa-L/view?usp=drive_link)
+wget -O data.zip (https://drive.google.com/file/d/1X_AsrJATRUNVhH69INLyhjL6vRsqPa-L/view?usp=drive_link)
 unzip data.zip -d data/
 ```
 
