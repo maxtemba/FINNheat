@@ -1859,6 +1859,186 @@
       },
       "status": "overflow",
       "timestamp": "2026-03-25T17:49:16.181936"
+    },
+    {
+      "genome_id": "g41_depth_321",
+      "genome": {
+        "enc_ch": [
+          16,
+          32,
+          48
+        ],
+        "enc_depth": [
+          3,
+          2,
+          1
+        ],
+        "enc_k": [
+          3,
+          3,
+          3
+        ],
+        "enc_bits": [
+          4,
+          4,
+          4
+        ],
+        "btl_ch": 64,
+        "dec_ch": [
+          48,
+          32,
+          16
+        ]
+      },
+      "predicted": {
+        "lut": 18967.0,
+        "bram": 36.0,
+        "dsp": 176.0,
+        "fps": 27.15389000111222
+      },
+      "actual": {
+        "lut": 118914,
+        "lut_ram": 2813,
+        "bram": 26,
+        "dsp": 128
+      },
+      "status": "overflow",
+      "timestamp": "2026-03-26T17:33:39.979192"
+    },
+    {
+      "genome_id": "g42_depth_123",
+      "genome": {
+        "enc_ch": [
+          16,
+          32,
+          48
+        ],
+        "enc_depth": [
+          1,
+          2,
+          3
+        ],
+        "enc_k": [
+          3,
+          3,
+          3
+        ],
+        "enc_bits": [
+          4,
+          4,
+          4
+        ],
+        "btl_ch": 64,
+        "dec_ch": [
+          48,
+          32,
+          16
+        ]
+      },
+      "predicted": {
+        "lut": 18593.0,
+        "bram": 48.0,
+        "dsp": 176.0,
+        "fps": 27.15389000111222
+      },
+      "actual": {
+        "lut": 118886,
+        "lut_ram": 2495,
+        "bram": 38,
+        "dsp": 128
+      },
+      "status": "overflow",
+      "timestamp": "2026-03-26T17:40:52.798755"
+    },
+    {
+      "genome_id": "g43_depth_213",
+      "genome": {
+        "enc_ch": [
+          16,
+          32,
+          48
+        ],
+        "enc_depth": [
+          2,
+          1,
+          3
+        ],
+        "enc_k": [
+          3,
+          3,
+          3
+        ],
+        "enc_bits": [
+          4,
+          4,
+          4
+        ],
+        "btl_ch": 64,
+        "dec_ch": [
+          48,
+          32,
+          16
+        ]
+      },
+      "predicted": {
+        "lut": 18588.0,
+        "bram": 46.0,
+        "dsp": 176.0,
+        "fps": 27.15389000111222
+      },
+      "actual": {
+        "lut": 119079,
+        "lut_ram": 2594,
+        "bram": 36,
+        "dsp": 128
+      },
+      "status": "overflow",
+      "timestamp": "2026-03-26T17:48:05.773513"
+    },
+    {
+      "genome_id": "g44_depth_311_int8",
+      "genome": {
+        "enc_ch": [
+          16,
+          32,
+          48
+        ],
+        "enc_depth": [
+          3,
+          1,
+          1
+        ],
+        "enc_k": [
+          3,
+          3,
+          3
+        ],
+        "enc_bits": [
+          8,
+          8,
+          8
+        ],
+        "btl_ch": 64,
+        "dec_ch": [
+          48,
+          32,
+          16
+        ]
+      },
+      "predicted": {
+        "lut": 23935.0,
+        "bram": 44.0,
+        "dsp": 160.0,
+        "fps": 27.15389000111222
+      },
+      "actual": {
+        "lut": 201064,
+        "lut_ram": 3833,
+        "bram": 32,
+        "dsp": 148
+      },
+      "status": "overflow",
+      "timestamp": "2026-03-26T17:57:17.864354"
     }
   ]
 }
