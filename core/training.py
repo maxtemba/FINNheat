@@ -19,13 +19,13 @@ def hggd_loss(preds, targets, device):
     gt_loc, gt_cls, gt_theta, gt_width, gt_depth = targets
     eps = 1e-6 # log(0) errors
 
-    # localization loss (penalty-reduced focal loss, pos threshold >= 0.99 as in HGGD)
+    # localization loss (penalty-reduced focal loss, gamma=4, pos threshold >= 0.7)
     pred_loc = torch.clamp(torch.sigmoid(pred_loc.float().clamp(-20, 20)), eps, 1 - eps)
-    pos_inds = gt_loc.ge(0.99).float()
-    neg_inds = gt_loc.lt(0.99).float()
+    pos_inds = gt_loc.ge(0.7).float()
+    neg_inds = gt_loc.lt(0.7).float()
     neg_weights = torch.pow(1 - gt_loc, 4)
-    loss_pos = torch.log(pred_loc) * torch.pow(1 - pred_loc, 2) * pos_inds
-    loss_neg = torch.log(1 - pred_loc) * torch.pow(pred_loc, 2) * neg_weights * neg_inds
+    loss_pos = torch.log(pred_loc) * torch.pow(1 - pred_loc, 4) * pos_inds
+    loss_neg = torch.log(1 - pred_loc) * torch.pow(pred_loc, 4) * neg_weights * neg_inds
     loss_loc = -(loss_pos.sum() + loss_neg.sum()) / (pos_inds.sum() + 1)
 
     # classification loss (angle anchor focal loss, thres=0.5 alpha=0.25 as in HGGD)
@@ -36,16 +36,21 @@ def hggd_loss(preds, targets, device):
     loss_cls_neg = 0.75 * torch.log(1 - pred_cls) * torch.pow(pred_cls, 2) * cls_neg
     loss_cls = -(loss_cls_pos.sum() + loss_cls_neg.sum()) / (cls_pos.sum() + 1)
 
-    # regression loss (masked by cls confidence as in HGGD)
+    # regression loss (masked by cls confidence as in HGGD, clamped + averaged over 3 targets)
     cls_mask = cls_pos.expand_as(pred_theta)
     loss_reg = torch.tensor(0.0, device=device)
     if cls_mask.sum() > 0:
+        pred_theta_c = torch.clamp(pred_theta, -0.5, 0.5)
+        pred_width_c = torch.clamp(pred_width, -0.5, 0.5)
+        pred_depth_c = torch.clamp(pred_depth, -0.5, 0.5)
+        n = cls_mask.sum().float() + eps
         loss_reg = (
-                F.smooth_l1_loss(pred_theta[cls_mask>0], gt_theta[cls_mask>0]) +
-                F.smooth_l1_loss(pred_width[cls_mask>0], gt_width[cls_mask>0]) +
-                F.smooth_l1_loss(pred_depth[cls_mask>0], gt_depth[cls_mask>0])
+                (F.smooth_l1_loss(pred_theta_c * cls_mask, gt_theta * cls_mask, reduction='sum') / n +
+                 F.smooth_l1_loss(pred_width_c * cls_mask, gt_width * cls_mask, reduction='sum') / n +
+                 F.smooth_l1_loss(pred_depth_c * cls_mask, gt_depth * cls_mask, reduction='sum') / n) / 3.0
         )
-    return loss_loc + loss_cls + 5.0 * loss_reg
+    total = loss_loc + 0.2 * loss_cls + 0.5 * loss_reg
+    return total, loss_loc, loss_cls, loss_reg
 
 
 def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10, generation=None, log_csv=None, val_loader=None, scheduler=None, heatmap_callback=None):
@@ -81,6 +86,7 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
         if epochs > 1: print(f"--- epoch {epoch+1}/{epochs} ---")
 
         total_loss = 0
+        total_loc = total_cls = total_reg = 0
         count = 0
         iterator = iter(loader)
         limit = max_batches if max_batches else len(loader)
@@ -97,7 +103,7 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
             optimizer.zero_grad(set_to_none=True)
             with autocast('cuda', enabled=use_amp):
                 preds = model(x)
-                loss = hggd_loss(preds, targets, device)
+                loss, loss_loc, loss_cls, loss_reg = hggd_loss(preds, targets, device)
 
             if not torch.isfinite(loss):
                 continue
@@ -111,6 +117,9 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
             scaler.update()
 
             total_loss += loss.item()
+            total_loc  += loss_loc.item()
+            total_cls  += loss_cls.item()
+            total_reg  += loss_reg.item()
             count += 1
 
             if print_every and (i + 1) % print_every == 0:
@@ -118,27 +127,43 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
 
         # --- finished epoch
         avg_loss = total_loss / count if count > 0 else 999.0
+        avg_loc  = total_loc  / count if count > 0 else 0.0
+        avg_cls  = total_cls  / count if count > 0 else 0.0
+        avg_reg  = total_reg  / count if count > 0 else 0.0
 
         if epochs > 1:
-            print(f"train loss: {avg_loss:.4f}")
+            if save_path:
+                print(f"train loss: {avg_loss:.4f}  (loc:{avg_loc:.4f}  cls:{avg_cls:.4f}  reg:{avg_reg:.4f})")
+            else:
+                print(f"train loss: {avg_loss:.4f}")
 
         # --- validation
         val_loss = None
         if val_loader is not None:
             model.eval()
             val_total, val_count = 0, 0
+            val_loc = val_cls = val_reg = 0
             with torch.no_grad():
                 for x_v, targets_v in val_loader:
                     x_v = x_v.to(device, non_blocking=True)
                     targets_v = [t.to(device, non_blocking=True) for t in targets_v]
                     with autocast('cuda', enabled=use_amp):
                         preds_v = model(x_v)
-                        loss_v  = hggd_loss(preds_v, targets_v, device)
+                        loss_v, lv_loc, lv_cls, lv_reg = hggd_loss(preds_v, targets_v, device)
                     val_total += loss_v.item()
+                    val_loc   += lv_loc.item()
+                    val_cls   += lv_cls.item()
+                    val_reg   += lv_reg.item()
                     val_count += 1
             val_loss = val_total / val_count if val_count > 0 else 999.0
             model.train()
-            print(f"val loss:   {val_loss:.4f}")
+            if save_path:
+                vl = val_loc / val_count if val_count > 0 else 0.0
+                vc = val_cls / val_count if val_count > 0 else 0.0
+                vr = val_reg / val_count if val_count > 0 else 0.0
+                print(f"val loss:   {val_loss:.4f}  (loc:{vl:.4f}  cls:{vc:.4f}  reg:{vr:.4f})")
+            else:
+                print(f"val loss:   {val_loss:.4f}")
 
         # csv logging
         if log_csv:
