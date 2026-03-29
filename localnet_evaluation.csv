@@ -1,0 +1,6 @@
+trans_threshold,trans_correct,trans_total,trans_acc,rot_threshold,rot_correct,rot_total,rot_acc,grasp_threshold,grasp_correct,grasp_total,grasp_acc
+0.01,3,237,0.013,0.05,0,237,0.0,0.2,0,237,0.0
+0.02,6,237,0.025,0.1,7,237,0.03,0.4,2,237,0.008
+0.03,14,237,0.059,0.15,25,237,0.105,0.6,10,237,0.042
+0.04,18,237,0.076,0.2,52,237,0.219,0.8,14,237,0.059
+0.05,24,237,0.101,0.25,69,237,0.291,1.0,20,237,0.084
