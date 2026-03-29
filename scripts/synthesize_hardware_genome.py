@@ -16,7 +16,7 @@ from core.models import load_nas_model
 from core.hardware import synthesize_performance
 
 # --- config
-GENOME_FILE      = "../genomes/best_genome.txt"
+GENOME_FILE      = "outputs/gen33_genome.txt"
 BUILD_NAME       = "synth_best_genome"
 GENERATE_BITFILE = False  # set to True to also run full place-and-route
 

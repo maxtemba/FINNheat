@@ -9,7 +9,7 @@ from core.hardware import estimate_performance
 from core.models import load_nas_model
 
 # --- config paths
-GENOME_FILE = "../genomes/best_genome.txt"
+GENOME_FILE = "outputs/gen33_genome.txt"
 
 def main():
     print("starting hardware verification for the best genome...")

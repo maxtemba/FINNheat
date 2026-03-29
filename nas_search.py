@@ -19,10 +19,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 POPULATION_SIZE = 20
-GENERATIONS     = 90
+GENERATIONS     = 60
 ELITISM         = 2
 TRAIN_BATCHES   = 100
-TRAIN_EPOCHS    = 12
+TRAIN_EPOCHS    = 10
 LOG_FILE = "nas_search_log.csv"
 
 # --- hardware limits (Kria KV260)

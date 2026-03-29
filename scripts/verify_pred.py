@@ -6,8 +6,9 @@ from core.models import load_nas_model
 from core.dataset import GraspNetHeatmapDataset
 
 # --- config paths
-GENOME_FILE = "../genomes/best_genome.txt"
-WEIGHTS_FILE = "outputs/trained_model.pth"
+# genome is saved alongside weights during training to prevent arch/weight mismatch
+GENOME_FILE = "outputs/gen33_genome.txt"
+WEIGHTS_FILE = "outputs/gen33_full_model.pth"
 GRASPNET_ROOT = "../data/graspnet"
 
 # --- settings
@@ -42,7 +43,8 @@ def main():
 
     # 3. inference
     print(f"running inference...")
-    x_tensor, _ = ds[IMG_INDEX]
+    x_tensor, targets = ds[IMG_INDEX]
+    gt_loc = targets[0].squeeze().numpy()
 
     with torch.no_grad():
         # add batch dimension [1, 4, H, W]
@@ -64,21 +66,26 @@ def main():
     pred_depth = p_depth.squeeze().numpy()[0]
 
     # plot setup
-    fig, axs = plt.subplots(2, 3, figsize=(15, 8), facecolor='white')
+    fig, axs = plt.subplots(2, 4, figsize=(20, 8), facecolor='white')
     fig.suptitle(f"NAS Model Prediction: Image {IMG_INDEX}", fontsize=16)
 
     # inputs
     axs[0,0].imshow(rgb)
     axs[0,0].set_title("Input RGB")
 
-    # heatmaps
-    im1 = axs[0,1].imshow(pred_conf, cmap='jet', vmin=0, vmax=1)
-    axs[0,1].set_title("Pred Confidence")
-    fig.colorbar(im1, ax=axs[0,1])
+    # gt heatmap
+    im0 = axs[0,1].imshow(gt_loc, cmap='jet', vmin=0, vmax=1)
+    axs[0,1].set_title("GT Heatmap")
+    fig.colorbar(im0, ax=axs[0,1])
 
-    im2 = axs[0,2].imshow(pred_anchor, cmap='viridis', vmin=0, vmax=1)
-    axs[0,2].set_title("Pred Angle Class")
-    fig.colorbar(im2, ax=axs[0,2])
+    # heatmaps
+    im1 = axs[0,2].imshow(pred_conf, cmap='jet', vmin=0, vmax=1)
+    axs[0,2].set_title("Pred Confidence")
+    fig.colorbar(im1, ax=axs[0,2])
+
+    im2 = axs[0,3].imshow(pred_anchor, cmap='viridis', vmin=0, vmax=1)
+    axs[0,3].set_title("Pred Angle Class")
+    fig.colorbar(im2, ax=axs[0,3])
 
     # regression
     im3 = axs[1,0].imshow(pred_theta, cmap='twilight')
@@ -92,6 +99,12 @@ def main():
     im5 = axs[1,2].imshow(pred_depth, cmap='coolwarm')
     axs[1,2].set_title("Pred Depth")
     fig.colorbar(im5, ax=axs[1,2])
+
+    # overlay: pred vs gt side by side
+    diff = abs(pred_conf - gt_loc)
+    im6 = axs[1,3].imshow(diff, cmap='hot', vmin=0, vmax=1)
+    axs[1,3].set_title("Error |Pred - GT|")
+    fig.colorbar(im6, ax=axs[1,3])
 
     for ax in axs.flat: ax.axis('off')
     plt.tight_layout()
