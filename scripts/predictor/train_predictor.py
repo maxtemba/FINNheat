@@ -6,11 +6,12 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import LeaveOneOut
 import joblib
 
+import config
 from core.predictor import genome_to_features, FEATURE_NAMES
 
 PARALLELISM = 4   # change to match the data file being trained
-DATA_FILE   = f"outputs/calibration_data_p{PARALLELISM}.json"
-SAVE_PATH   = f"outputs/predictors/hw_predictor_p{PARALLELISM}.pkl"
+DATA_FILE   = config.calibration_data_path(PARALLELISM)
+SAVE_PATH   = config.predictor_path(PARALLELISM)
 
 
 def main():
@@ -100,7 +101,7 @@ def main():
         print(f"top features ({name}): {top_str}")
 
     # 6. save
-    os.makedirs("outputs/predictors", exist_ok=True)
+    os.makedirs(config.PREDICTORS_DIR, exist_ok=True)
     bundle = {
         "lut":           rf_lut,
         "bram":          rf_bram,

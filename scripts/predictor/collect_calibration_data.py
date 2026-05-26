@@ -12,12 +12,14 @@ from datetime import datetime
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
+import config
+
 # override dummy paths with real vivado/vitis installations
-os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
-os.environ["VITIS_HLS"]     = "/tools/Xilinx/Vitis_HLS/2024.2"
-os.environ["XILINX_VITIS"]  = "/tools/Xilinx/Vitis/2024.2"
-os.environ["VIVADO_PATH"]   = "/tools/Xilinx/Vivado/2024.2"
-os.environ["FINN_RTLLIB"]   = "/home/max/finn-plus/finn-rtllib"
+os.environ["XILINX_VIVADO"] = config.XILINX_VIVADO_PATH
+os.environ["VITIS_HLS"]     = config.VITIS_HLS_PATH
+os.environ["XILINX_VITIS"]  = config.XILINX_VITIS_PATH
+os.environ["VIVADO_PATH"]   = config.XILINX_VIVADO_PATH
+os.environ["FINN_RTLLIB"]   = config.FINN_RTLLIB_PATH
 
 from core.models import load_nas_model
 from core.hardware import estimate_performance, synthesize_performance, _parse_synth_utilization_rpt
@@ -94,8 +96,8 @@ GENOMES = [
 ]
 
 PARALLELISM    = 4   # change to 2 or 4 when collecting those levels
-GENOME_FILE    = "../genomes/best_genome.txt"
-OUTPUT_FILE    = f"outputs/calibration_data_p{PARALLELISM}.json"
+GENOME_FILE    = os.path.join(config.GENOMES_DIR, "calibration_active.txt")
+OUTPUT_FILE    = config.calibration_data_path(PARALLELISM)
 # synthesis timeouts:
 #   synth step (synth_1) finishes in <10 min — we read the utilization report immediately
 #   if the design overflows (lut > device limit) we kill right away, no need to wait for placement
@@ -104,7 +106,7 @@ HARD_CAP_MINS       = 90   # absolute maximum (synth ~10 min + placement up to 6
 PRE_SYNTH_TIMEOUT   = 45 * 60  # kill if synthesis step hasn't finished in 45 min
 POST_SYNTH_TIMEOUT  = 60 * 60  # allow up to 60 min for placement on valid (tight) designs
 POLL_INTERVAL       = 30   # seconds between checks
-LUT_LIMIT           = 117120   # kv260 lut capacity
+LUT_LIMIT           = config.HARDWARE_LIMITS["LUT"]   # kv260 lut capacity
 
 
 def _synth_sentinel_exists():
@@ -197,7 +199,8 @@ def write_genome(genome):
 
 
 def main():
-    os.makedirs("outputs", exist_ok=True)
+    os.makedirs(config.OUTPUTS_DIR, exist_ok=True)
+    os.makedirs(config.GENOMES_DIR, exist_ok=True)
 
     # load existing runs for resume support
     if os.path.exists(OUTPUT_FILE):

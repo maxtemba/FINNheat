@@ -4,47 +4,15 @@ Hardware-aware NAS pipeline that evolves quantized grasping models for Xilinx FP
 
 ## Setup
 
-**Requirements:** Ubuntu 22.04, Python 3.10, Xilinx Vivado/Vitis HLS 2024.2
-
-### 1. Install Miniforge
-
-```bash
-wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-bash Miniforge3-Linux-x86_64.sh
-```
-
-### 2. Create environment
-
-```bash
-conda create -n finn-plus python=3.10 -y
-conda activate finn-plus
-```
-
-### 3. Install dependencies
+Requires Python 3.10. Hardware synthesis additionally needs Ubuntu 22.04 and Xilinx Vivado/Vitis HLS 2024.2 installed at `/tools/Xilinx/`.
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install brevitas==0.10.2
-pip install finn-plus
+pip install brevitas==0.10.2 finn-plus numpy scikit-learn joblib matplotlib Pillow
 finn deps update
-pip install numpy scikit-learn joblib matplotlib Pillow
 ```
 
-### 4. Install project
-
-```bash
-git clone <repo-url>
-cd FINNheat
-pip install -e .
-```
-
-### 5. Vivado/Vitis HLS 2024.2
-
-Install from [xilinx.com](https://www.xilinx.com/support/download.html) to `/tools/Xilinx/`. Required for hardware synthesis only.
-
-### 6. GraspNet dataset
-
-Extract into `data/graspnet/`:
+Extract the GraspNet dataset into `data/graspnet/`:
 
 ```
 FINNheat/data/graspnet/
@@ -54,82 +22,41 @@ FINNheat/data/graspnet/
 
 ## Usage
 
-Always activate the conda env first:
 ```bash
-conda activate finn-plus
-```
-
-### NAS Search
-```bash
+# NAS search — writes genomes/best_nas_genome.txt + results/nas_search_log.csv
 python nas_search.py
-```
-Runs genetic algorithm (population 20, 90 generations). Outputs `scripts/outputs/best_nas_genome.txt` and `nas_search_log.csv`.
 
-### Full Training
-```bash
-cd scripts && python train_genome.py
-```
-Trains the genome at `scripts/outputs/gen33_genome.txt`. Outputs `scripts/outputs/gen33_full_model.pth`.
+# Full training — trains scripts/outputs/gen33_genome.txt -> scripts/outputs/gen33_full_model.pth
+cd scripts/training && python train_genome.py
 
-### Verify
-```bash
-cd scripts && python verify_pred.py   # visualize predictions
-cd scripts && python verify_gt.py     # visualize ground truth
-```
+# Export trained model to QONNX for FINN+
+cd scripts/hardware && python export_qnnx.py
 
-### Export to FPGA
-```bash
-cd scripts && python export_qnnx.py
-```
-Exports trained model to QONNX with INT4/INT8 metadata for FINN+.
+# Hardware estimate / full synthesis
+cd scripts/hardware && python predict_hardware_genome.py       # fast RF estimate
+cd scripts/hardware && python synthesize_hardware_genome.py    # full HLS + OOC (~30–120 min)
 
-### Hardware Estimation
-```bash
-cd scripts && python predict_hardware_genome.py       # fast RF estimate
-cd scripts && python synthesize_hardware_genome.py    # full HLS + OOC (~30–120 min)
-```
-
-### Calibrate Hardware Predictor (optional)
-Pre-trained predictors are in `scripts/outputs/predictors/`. To retrain:
-```bash
-cd scripts && python collect_calibration_data.py   # synthesize genomes, set PARALLELISM first
-cd scripts && python train_predictor.py            # train RF predictor from collected data
+# (Optional) re-calibrate the hardware predictor; pre-trained pkls live in scripts/outputs/predictors/
+cd scripts/predictor && python collect_calibration_data.py    # set PARALLELISM first
+cd scripts/predictor && python train_predictor.py
 ```
 
 ## Project Structure
 
 ```
+config.py                              central paths + hyperparameters
 nas_search.py                          genetic algorithm search
-core/
-  models.py                            NAS_GHM_Model, load_nas_model()
-  evolution.py                         genome encoding, mutate, crossover, fitness
-  training.py                          train_model(), hggd_loss()
-  hardware.py                          FINN+ hardware estimator (FPS/LUTs/BRAMs/DSPs)
-  predictor.py                         calibrated random forest predictor
-  dataset.py                           GraspNetHeatmapDataset
-  heatmap_generator.py                 Gaussian heatmaps + anchor encoding
-  export.py                            export_to_qonnx()
+core/                                  pipeline modules (models, training, hardware, dataset, ...)
 scripts/
-  train_genome.py                      full training of a genome
-  verify_pred.py                       visualize model predictions
-  verify_gt.py                         visualize ground truth heatmaps
-  export_qnnx.py                       export to QONNX for FINN+
-  predict_hardware_genome.py           run hardware estimator on a genome
-  synthesize_hardware_genome.py        full HLS + out-of-context synthesis
-  collect_calibration_data.py          synthesize genomes to build predictor training data
-  train_predictor.py                   train calibrated hardware predictor
-  build_image_cache.py                 pre-cache dataset images as .npy for faster loading
-  _synth_worker.py                     subprocess worker called by collect script
-  outputs/
-    gen33_genome.txt                   active genome used for training
-    gen33_full_model.pth               trained model weights
-    predictors/hw_predictor_p{2,3,4}.pkl  calibrated RF predictors per parallelism level
-    calibration_data_p{2,3,4}.json    raw synthesis data for predictor training
+  training/      train_genome.py, build_image_cache.py
+  hardware/      export_qnnx.py, predict_hardware_genome.py, synthesize_hardware_genome.py
+  predictor/     collect_calibration_data.py, train_predictor.py, _synth_worker.py
+  outputs/       active genome, trained weights, predictor pkls, calibration JSON
+genomes/                               NAS-saved best genomes
+results/                               experiment CSVs and run logs
 ```
 
 ## Genome Encoding
-
-Each genome is a dict with 7 parameters:
 
 | Gene | Values | Description |
 |------|--------|-------------|

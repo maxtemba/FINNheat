@@ -5,18 +5,18 @@ import os
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
+import config
+
 # override dummy paths with real vivado/vitis installations
-os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
-os.environ["VITIS_HLS"]     = "/tools/Xilinx/Vitis_HLS/2024.2"
-os.environ["XILINX_VITIS"]  = "/tools/Xilinx/Vitis/2024.2"
-os.environ["VIVADO_PATH"]   = "/tools/Xilinx/Vivado/2024.2"
-os.environ["FINN_RTLLIB"]   = "/home/max/finn-plus/finn-rtllib"
+os.environ["XILINX_VIVADO"] = config.XILINX_VIVADO_PATH
+os.environ["VITIS_HLS"]     = config.VITIS_HLS_PATH
+os.environ["XILINX_VITIS"]  = config.XILINX_VITIS_PATH
+os.environ["VIVADO_PATH"]   = config.XILINX_VIVADO_PATH
+os.environ["FINN_RTLLIB"]   = config.FINN_RTLLIB_PATH
 
 from core.models import load_nas_model
 from core.hardware import synthesize_performance
 
-# --- config
-GENOME_FILE      = "outputs/gen33_genome.txt"
 BUILD_NAME       = "synth_best_genome"
 GENERATE_BITFILE = False  # set to True to also run full place-and-route
 
@@ -25,7 +25,7 @@ def main():
     print("starting full hardware synthesis for the best genome...")
 
     try:
-        model = load_nas_model(GENOME_FILE, device='cpu')
+        model = load_nas_model(config.ACTIVE_GENOME, device='cpu')
         print("model built successfully.")
     except Exception as e:
         print(f"setup failed: {e}")
@@ -53,18 +53,14 @@ def main():
         print(f"Timing:        {freq_mhz} MHz  (WNS = {wns} ns)  {'PASS' if timing_ok else 'FAIL'}")
         print("------------------------------")
 
-        LUT_MAX  = 117120
-        BRAM_MAX = 288
-        DSP_MAX  = 1248
-
-        lut_pct  = metrics['lut']  / LUT_MAX  * 100
-        bram_pct = metrics['bram'] / BRAM_MAX * 100
-        dsp_pct  = metrics['dsp']  / DSP_MAX  * 100
+        lut_pct  = metrics['lut']  / config.HARDWARE_LIMITS["LUT"]  * 100
+        bram_pct = metrics['bram'] / config.HARDWARE_LIMITS["BRAM"] * 100
+        dsp_pct  = metrics['dsp']  / config.HARDWARE_LIMITS["DSP"]  * 100
 
         print(f"\nKV260 utilization:")
-        print(f"  LUTs:  {lut_pct:.1f}%  ({metrics['lut']} / {LUT_MAX})")
-        print(f"  BRAMs: {bram_pct:.1f}%  ({metrics['bram']} / {BRAM_MAX})")
-        print(f"  DSPs:  {dsp_pct:.1f}%  ({metrics['dsp']} / {DSP_MAX})")
+        print(f"  LUTs:  {lut_pct:.1f}%  ({metrics['lut']} / {config.HARDWARE_LIMITS['LUT']})")
+        print(f"  BRAMs: {bram_pct:.1f}%  ({metrics['bram']} / {config.HARDWARE_LIMITS['BRAM']})")
+        print(f"  DSPs:  {dsp_pct:.1f}%  ({metrics['dsp']} / {config.HARDWARE_LIMITS['DSP']})")
 
         fits = lut_pct <= 100 and bram_pct <= 100 and dsp_pct <= 100 and timing_ok
         print(f"\nFits on KV260: {'YES' if fits else 'NO'}")

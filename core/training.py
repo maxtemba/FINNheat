@@ -1,18 +1,23 @@
 import os
 import csv
+from collections import namedtuple
 import torch
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 
+# loss decomposition returned by hggd_loss and aggregated by _run_epoch / _validate
+LossParts = namedtuple('LossParts', ['total', 'loc', 'cls', 'reg'])
+
+
 def hggd_loss(preds, targets, device):
     """
     calculates error for the Grasp Heatmap Model (GHM).
-    it implements the loss function from the HGGD paper and properly deals with 99% of background.
+    implements the loss function from the HGGD paper and properly deals with 99% of background.
 
     :param preds: output from the model (loc, cls, theta, width, depth).
     :param targets: models ground truth (loc, cls, theta, width, depth).
     :param device: CPU/GPU.
-    :return: single number as total loss/error.
+    :return: LossParts(total, loc, cls, reg).
     """
 
     pred_loc, pred_cls, pred_theta, pred_width, pred_depth = preds
@@ -50,12 +55,91 @@ def hggd_loss(preds, targets, device):
                  F.smooth_l1_loss(pred_depth_c * cls_mask, gt_depth * cls_mask, reduction='sum') / n) / 3.0
         )
     total = loss_loc + 0.2 * loss_cls + 0.5 * loss_reg
-    return total, loss_loc, loss_cls, loss_reg
+    return LossParts(total, loss_loc, loss_cls, loss_reg)
 
 
-def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_batches=None, print_every=10, generation=None, log_csv=None, val_loader=None, scheduler=None, heatmap_callback=None):
+def _run_epoch(model, loader, optimizer, scaler, device, max_batches=None, print_every=0):
+    """train one epoch; returns mean LossParts (or all-zeros LossParts with total=999 on empty)."""
+    model.train()
+    use_amp = device.type == 'cuda'
+    total = loc = cls = reg = 0.0
+    count = 0
+    iterator = iter(loader)
+    limit = max_batches if max_batches else len(loader)
+
+    for i in range(limit):
+        try:
+            x, targets = next(iterator)
+        except StopIteration:
+            break
+
+        x = x.to(device, non_blocking=True)
+        targets = [t.to(device, non_blocking=True) for t in targets]
+
+        optimizer.zero_grad(set_to_none=True)
+        with autocast('cuda', enabled=use_amp):
+            preds = model(x)
+            parts = hggd_loss(preds, targets, device)
+
+        if not torch.isfinite(parts.total):
+            continue
+
+        scaler.scale(parts.total).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+
+        total += parts.total.item()
+        loc   += parts.loc.item()
+        cls   += parts.cls.item()
+        reg   += parts.reg.item()
+        count += 1
+
+        if print_every and (i + 1) % print_every == 0:
+            print(f"      batch {i+1}/{limit} | loss: {parts.total.item():.4f}")
+
+    if count == 0:
+        return LossParts(999.0, 0.0, 0.0, 0.0)
+    return LossParts(total/count, loc/count, cls/count, reg/count)
+
+
+def _validate(model, val_loader, device, use_amp):
+    """returns mean LossParts on the validation set."""
+    model.eval()
+    total = loc = cls = reg = 0.0
+    count = 0
+    with torch.no_grad():
+        for x, targets in val_loader:
+            x = x.to(device, non_blocking=True)
+            targets = [t.to(device, non_blocking=True) for t in targets]
+            with autocast('cuda', enabled=use_amp):
+                preds = model(x)
+                parts = hggd_loss(preds, targets, device)
+            total += parts.total.item()
+            loc   += parts.loc.item()
+            cls   += parts.cls.item()
+            reg   += parts.reg.item()
+            count += 1
+    if count == 0:
+        return LossParts(999.0, 0.0, 0.0, 0.0)
+    return LossParts(total/count, loc/count, cls/count, reg/count)
+
+
+def _log_csv(log_csv, generation, epoch, train_loss, val_loss):
+    new_file = not os.path.isfile(log_csv)
+    with open(log_csv, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if new_file:
+            writer.writerow(['generation', 'epoch', 'train_loss', 'val_loss'])
+        writer.writerow([generation, epoch, train_loss, val_loss])
+
+
+def train_model(model, loader, optimizer, device, epochs=1, save_path=None,
+                max_batches=None, print_every=10, generation=None, log_csv=None,
+                val_loader=None, scheduler=None, heatmap_callback=None):
     """
-    main training loop that both handles fast NAS proxy training and full training.
+    main training loop that handles both fast NAS proxy training and full training.
 
     :param model: pytorch model.
     :param loader: dataloader.
@@ -63,116 +147,45 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
     :param device: CPU/GPU.
     :param epochs: number of epochs.
     :param save_path: (optional) path to save the trained model.
-    :param max_batches: (optional) maximum number of batches.
-    :param print_every: print settings.
-    :param generation: (optional) current generation number for logging.
-    :param log_csv: (optional) path to csv file for logging loss.
-    :return: best loss.
+    :param max_batches: (optional) maximum number of batches per epoch.
+    :param print_every: batch-level print frequency (0 disables).
+    :param generation: (optional) generation number for csv logging.
+    :param log_csv: (optional) path to csv file for per-epoch loss logging.
+    :param val_loader: (optional) validation dataloader.
+    :param scheduler: (optional) lr scheduler stepped after each epoch.
+    :param heatmap_callback: (optional) callable(model, epoch) fired every 5 epochs.
+    :return: best monitored loss (val if available, else train).
     """
-
-    model.train()
-    best_loss = float('inf')
     use_amp = device.type == 'cuda'
     scaler = GradScaler('cuda', enabled=use_amp)
+    best_loss = float('inf')
+    full_log = save_path is not None  # full training prints per-component losses
 
-    # console logging
-    mode = "training" if save_path else "proxy search"
-    limit_str = f"{max_batches} batches" if max_batches else "full dataset"
-    if save_path:
-        print(f"\n{mode}: {epochs} epochs x [{limit_str}]")
+    if full_log:
+        limit_str = f"{max_batches} batches" if max_batches else "full dataset"
+        print(f"\ntraining: {epochs} epochs x [{limit_str}]")
 
-    # -- epoch loop
     for epoch in range(epochs):
         if epochs > 1: print(f"--- epoch {epoch+1}/{epochs} ---")
 
-        total_loss = 0
-        total_loc = total_cls = total_reg = 0
-        count = 0
-        iterator = iter(loader)
-        limit = max_batches if max_batches else len(loader)
-
-        for i in range(limit):
-            try:
-                x, targets = next(iterator)
-            except StopIteration:
-                break
-
-            x = x.to(device, non_blocking=True)
-            targets = [t.to(device, non_blocking=True) for t in targets]
-
-            optimizer.zero_grad(set_to_none=True)
-            with autocast('cuda', enabled=use_amp):
-                preds = model(x)
-                loss, loss_loc, loss_cls, loss_reg = hggd_loss(preds, targets, device)
-
-            if not torch.isfinite(loss):
-                continue
-
-            scaler.scale(loss).backward()
-
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-            scaler.step(optimizer)
-            scaler.update()
-
-            total_loss += loss.item()
-            total_loc  += loss_loc.item()
-            total_cls  += loss_cls.item()
-            total_reg  += loss_reg.item()
-            count += 1
-
-            if print_every and (i + 1) % print_every == 0:
-                print(f"      batch {i+1}/{limit} | loss: {loss.item():.4f}")
-
-        # --- finished epoch
-        avg_loss = total_loss / count if count > 0 else 999.0
-        avg_loc  = total_loc  / count if count > 0 else 0.0
-        avg_cls  = total_cls  / count if count > 0 else 0.0
-        avg_reg  = total_reg  / count if count > 0 else 0.0
+        train = _run_epoch(model, loader, optimizer, scaler, device,
+                           max_batches=max_batches, print_every=print_every)
 
         if epochs > 1:
-            if save_path:
-                print(f"train loss: {avg_loss:.4f}  (loc:{avg_loc:.4f}  cls:{avg_cls:.4f}  reg:{avg_reg:.4f})")
+            if full_log:
+                print(f"train loss: {train.total:.4f}  (loc:{train.loc:.4f}  cls:{train.cls:.4f}  reg:{train.reg:.4f})")
             else:
-                print(f"train loss: {avg_loss:.4f}")
+                print(f"train loss: {train.total:.4f}")
 
-        # --- validation
-        val_loss = None
-        if val_loader is not None:
-            model.eval()
-            val_total, val_count = 0, 0
-            val_loc = val_cls = val_reg = 0
-            with torch.no_grad():
-                for x_v, targets_v in val_loader:
-                    x_v = x_v.to(device, non_blocking=True)
-                    targets_v = [t.to(device, non_blocking=True) for t in targets_v]
-                    with autocast('cuda', enabled=use_amp):
-                        preds_v = model(x_v)
-                        loss_v, lv_loc, lv_cls, lv_reg = hggd_loss(preds_v, targets_v, device)
-                    val_total += loss_v.item()
-                    val_loc   += lv_loc.item()
-                    val_cls   += lv_cls.item()
-                    val_reg   += lv_reg.item()
-                    val_count += 1
-            val_loss = val_total / val_count if val_count > 0 else 999.0
-            model.train()
-            if save_path:
-                vl = val_loc / val_count if val_count > 0 else 0.0
-                vc = val_cls / val_count if val_count > 0 else 0.0
-                vr = val_reg / val_count if val_count > 0 else 0.0
-                print(f"val loss:   {val_loss:.4f}  (loc:{vl:.4f}  cls:{vc:.4f}  reg:{vr:.4f})")
+        val = _validate(model, val_loader, device, use_amp) if val_loader is not None else None
+        if val is not None:
+            if full_log:
+                print(f"val loss:   {val.total:.4f}  (loc:{val.loc:.4f}  cls:{val.cls:.4f}  reg:{val.reg:.4f})")
             else:
-                print(f"val loss:   {val_loss:.4f}")
+                print(f"val loss:   {val.total:.4f}")
 
-        # csv logging
         if log_csv:
-            file_exists = os.path.isfile(log_csv)
-            with open(log_csv, mode='a', newline='') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(['generation', 'epoch', 'train_loss', 'val_loss'])
-                writer.writerow([generation, epoch + 1, avg_loss, val_loss])
+            _log_csv(log_csv, generation, epoch + 1, train.total, val.total if val else None)
 
         if scheduler is not None:
             scheduler.step()
@@ -181,7 +194,7 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None, max_
             heatmap_callback(model, epoch + 1)
 
         # save on best monitored loss (val if available, else train)
-        monitor = val_loss if val_loss is not None else avg_loss
+        monitor = val.total if val is not None else train.total
         if monitor < best_loss:
             best_loss = monitor
             if save_path:

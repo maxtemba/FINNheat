@@ -3,11 +3,13 @@ import re
 import glob
 import json
 import shutil
+from contextlib import contextmanager
 
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
 from core.export import export_to_qonnx
+from config import TARGET_BOARD, TARGET_FPGA, TARGET_CLOCK_NS, BUILDS_DIR, FINN_TMP_DIR
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import (
@@ -22,18 +24,13 @@ from finn.builder.build_dataflow_steps import (
     step_create_stitched_ip, step_out_of_context_synthesis,
 )
 
-# --- config
-TARGET_BOARD = "KV260_SOM"
-TARGET_FPGA  = "xck26-sfvc784-2LV-c"
-TARGET_CLOCK = 4.44  # ~225 MHz
-
 
 def _parse_synth_utilization_rpt():
     # reads vivado synthesis utilization report from FINN_TMP when ooc synthesis fails
     # synthesis (synth_1) always completes even on overflow; only impl_1 (place_design) fails
     # returns {lut, lut_ram, bram, dsp, overflow=True} or None if report not found
     pattern = os.path.join(
-        os.path.abspath("FINN_TMP"), "synth_out_of_context_*",
+        FINN_TMP_DIR, "synth_out_of_context_*",
         "results_finn_design_wrapper", "vivadocompile",
         "vivadocompile.runs", "synth_1",
         "finn_design_wrapper_utilization_synth.rpt"
@@ -112,6 +109,32 @@ def build_folding_config(mw, config_path, parallelism=2):
     with open(config_path, "w") as f: json.dump(folding, f, indent=2)
 
 
+@contextmanager
+def _finn_build_env(build_name, need_vivado=False):
+    # sets up the build dir + env vars finn expects, then cleans up on exit.
+    # need_vivado=True: real synthesis path — creates FINN_TMP, sets FINN_CUSTOM_HLS.
+    # need_vivado=False: estimation only — falls back to a dummy XILINX_VIVADO path.
+    build_dir = os.path.join(BUILDS_DIR, f"build_{build_name}")
+    os.environ['FINN_BUILD_DIR'] = build_dir
+    os.makedirs(build_dir, exist_ok=True)
+
+    if need_vivado:
+        # finn writes intermediate HLS artifacts under FINN_TMP
+        os.makedirs(FINN_TMP_DIR, exist_ok=True)
+        # HLS TCL scripts require FINN_CUSTOM_HLS to be set (even if unused)
+        os.environ.setdefault('FINN_CUSTOM_HLS', '')
+    else:
+        # allow estimation without a real vivado installation
+        os.environ.setdefault('XILINX_VIVADO', '/dummy')
+
+    try:
+        yield build_dir
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
+        if need_vivado:
+            shutil.rmtree(FINN_TMP_DIR, ignore_errors=True)
+
+
 def _prepare_finn_ir(model, build_dir, parallelism=2):
     # export to qonnx, run ir conversion steps, write folding config
     # returns (onnx_file, config_path) or (None, None) on failure
@@ -125,7 +148,7 @@ def _prepare_finn_ir(model, build_dir, parallelism=2):
         output_dir=build_dir,
         board=TARGET_BOARD,
         fpga_part=TARGET_FPGA,
-        synth_clk_period_ns=TARGET_CLOCK
+        synth_clk_period_ns=TARGET_CLOCK_NS
     )
 
     try:
@@ -151,63 +174,50 @@ def estimate_performance(model, build_name="finn_eval", parallelism=2):
     :param build_name: FINN build name.
     :return: hardware estimate dict or None.
     """
-    build_dir = os.path.abspath(os.path.join("builds", f"build_{build_name}"))
-    os.environ['FINN_BUILD_DIR'] = build_dir
-    os.makedirs(build_dir, exist_ok=True)
-
-    # allow estimation without a real vivado installation
-    if 'XILINX_VIVADO' not in os.environ:
-        os.environ['XILINX_VIVADO'] = '/dummy'
-
     print(f"starting hardware estimation for: {build_name}")
 
-    onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
-    if not onnx_file:
-        return None
+    with _finn_build_env(build_name, need_vivado=False) as build_dir:
+        onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
+        if not onnx_file:
+            return None
 
-    cfg = DataflowBuildConfig(
-        output_dir=build_dir, board=TARGET_BOARD,
-        fpga_part=TARGET_FPGA, synth_clk_period_ns=TARGET_CLOCK,
-        folding_config_file=config_path,
-        generate_outputs=[DataflowOutputType.ESTIMATE_REPORTS],
-        steps=[
-            step_qonnx_to_finn, step_tidy_up, step_streamline,
-            step_convert_to_hw, step_create_dataflow_partition,
-            step_specialize_layers, step_apply_folding_config,
-            step_generate_estimate_reports
-        ]
-    )
+        cfg = DataflowBuildConfig(
+            output_dir=build_dir, board=TARGET_BOARD,
+            fpga_part=TARGET_FPGA, synth_clk_period_ns=TARGET_CLOCK_NS,
+            folding_config_file=config_path,
+            generate_outputs=[DataflowOutputType.ESTIMATE_REPORTS],
+            steps=[
+                step_qonnx_to_finn, step_tidy_up, step_streamline,
+                step_convert_to_hw, step_create_dataflow_partition,
+                step_specialize_layers, step_apply_folding_config,
+                step_generate_estimate_reports
+            ]
+        )
 
-    try:
-        build_dataflow_cfg(onnx_file, cfg=cfg)
+        try:
+            build_dataflow_cfg(onnx_file, cfg=cfg)
+        except Exception as e:
+            print(f"estimation failed: {e}")
+            return None
 
         p_path = os.path.join(build_dir, "report", "estimate_network_performance.json")
         r_path = os.path.join(build_dir, "report", "estimate_layer_resources.json")
 
         res_perf = {}
         res_res  = {}
-
         if os.path.exists(p_path):
             with open(p_path, 'r') as f: res_perf = json.load(f)
         if os.path.exists(r_path):
             with open(r_path, 'r') as f: res_res  = json.load(f)
 
         total = res_res.get("total", {})
-
-        result = {
+        return {
             "fps":     res_perf.get("estimated_throughput_fps", 0),
             "latency": res_perf.get("critical_path_cycles", 0),
             "lut":     total.get("LUT", 0),
             "bram":    total.get("BRAM_18K", 0),
             "dsp":     total.get("DSP", 0)
         }
-        shutil.rmtree(build_dir, ignore_errors=True)
-        return result
-
-    except Exception as e:
-        print(f"estimation failed: {e}")
-        shutil.rmtree(build_dir, ignore_errors=True)
-        return None
 
 
 def synthesize_performance(model, build_name="finn_synth", generate_bitfile=False, parallelism=2):
@@ -219,59 +229,49 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
     :param generate_bitfile: also run full place-and-route to generate a bitfile.
     :return: dict with real synthesis metrics, or None on failure.
     """
-    build_dir = os.path.abspath(os.path.join("builds", f"build_{build_name}"))
-    os.environ['FINN_BUILD_DIR'] = build_dir
-    os.makedirs(build_dir, exist_ok=True)
-
-    # FINN needs FINN_TMP at CWD level for intermediate HLS artifacts
-    os.makedirs(os.path.abspath("FINN_TMP"), exist_ok=True)
-
-    # HLS TCL scripts require FINN_CUSTOM_HLS to be set (even if unused)
-    if 'FINN_CUSTOM_HLS' not in os.environ:
-        os.environ['FINN_CUSTOM_HLS'] = ''
-
     print(f"starting full synthesis for: {build_name}")
 
-    onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
-    if not onnx_file:
-        return None
+    with _finn_build_env(build_name, need_vivado=True) as build_dir:
+        onnx_file, config_path = _prepare_finn_ir(model, build_dir, parallelism=parallelism)
+        if not onnx_file:
+            return None
 
-    outputs = [DataflowOutputType.ESTIMATE_REPORTS, DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
-    if generate_bitfile:
-        outputs.append(DataflowOutputType.BITFILE)
+        outputs = [DataflowOutputType.ESTIMATE_REPORTS, DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
+        if generate_bitfile:
+            outputs.append(DataflowOutputType.BITFILE)
 
-    synth_steps = [
-        step_qonnx_to_finn, step_tidy_up, step_streamline,
-        step_convert_to_hw, step_create_dataflow_partition,
-        step_specialize_layers, step_apply_folding_config,
-        step_generate_estimate_reports,   # keep estimates for comparison
-        # step_set_fifo_depths omitted: requires RTL sim, not needed for OOC synth
-        step_hw_codegen,                  # generate HLS C++ code for every layer
-        step_hw_ipgen,                    # HLS C-synthesis for every layer
-        step_create_stitched_ip,          # stitch all HLS IPs into one design
-        step_out_of_context_synthesis,    # run Vivado OOC for real resource numbers
-    ]
+        synth_steps = [
+            step_qonnx_to_finn, step_tidy_up, step_streamline,
+            step_convert_to_hw, step_create_dataflow_partition,
+            step_specialize_layers, step_apply_folding_config,
+            step_generate_estimate_reports,   # keep estimates for comparison
+            # step_set_fifo_depths omitted: requires RTL sim, not needed for OOC synth
+            step_hw_codegen,                  # generate HLS C++ code for every layer
+            step_hw_ipgen,                    # HLS C-synthesis for every layer
+            step_create_stitched_ip,          # stitch all HLS IPs into one design
+            step_out_of_context_synthesis,    # run Vivado OOC for real resource numbers
+        ]
 
-    cfg = DataflowBuildConfig(
-        output_dir=build_dir, board=TARGET_BOARD,
-        fpga_part=TARGET_FPGA, synth_clk_period_ns=TARGET_CLOCK,
-        folding_config_file=config_path,
-        generate_outputs=outputs,
-        steps=synth_steps,
-    )
+        cfg = DataflowBuildConfig(
+            output_dir=build_dir, board=TARGET_BOARD,
+            fpga_part=TARGET_FPGA, synth_clk_period_ns=TARGET_CLOCK_NS,
+            folding_config_file=config_path,
+            generate_outputs=outputs,
+            steps=synth_steps,
+        )
 
-    try:
-        build_dataflow_cfg(onnx_file, cfg=cfg)
+        try:
+            build_dataflow_cfg(onnx_file, cfg=cfg)
+        except Exception as e:
+            print(f"synthesis failed: {e}")
+            return _parse_synth_utilization_rpt()  # parsed before FINN_TMP cleanup
 
         ooc_path   = os.path.join(build_dir, "report", "ooc_synth_and_timing.json")
         est_p_path = os.path.join(build_dir, "report", "estimate_network_performance.json")
 
         if not os.path.exists(ooc_path):
             print(f"synthesis report not found at: {ooc_path}")
-            overflow = _parse_synth_utilization_rpt()
-            shutil.rmtree(build_dir, ignore_errors=True)
-            shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
-            return overflow
+            return _parse_synth_utilization_rpt()
 
         with open(ooc_path, 'r') as f:
             ooc = json.load(f)
@@ -285,9 +285,9 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
 
         wns  = ooc.get("WNS", None)
         fmax = ooc.get("fmax_mhz", None)
-        clk  = round(1000.0 / fmax, 3) if fmax else TARGET_CLOCK
+        clk  = round(1000.0 / fmax, 3) if fmax else TARGET_CLOCK_NS
 
-        result = {
+        return {
             "fps_estimate":  est_fps,
             "lut":           ooc.get("LUT", 0),
             "lut_ram":       ooc.get("LUTRAM", 0),
@@ -297,13 +297,3 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
             "timing_wns_ns": wns,
             "clk_period_ns": clk,
         }
-        shutil.rmtree(build_dir, ignore_errors=True)
-        shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
-        return result
-
-    except Exception as e:
-        print(f"synthesis failed: {e}")
-        overflow = _parse_synth_utilization_rpt()
-        shutil.rmtree(build_dir, ignore_errors=True)
-        shutil.rmtree(os.path.abspath("FINN_TMP"), ignore_errors=True)
-        return overflow

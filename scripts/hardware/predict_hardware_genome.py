@@ -1,22 +1,20 @@
 import sys
-import os
 
 # Initialize FINN+ settings before any FINN imports
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
+import config
 from core.hardware import estimate_performance
 from core.models import load_nas_model
 
-# --- config paths
-GENOME_FILE = "outputs/gen33_genome.txt"
 
 def main():
     print("starting hardware verification for the best genome...")
 
     # 1. build model (weights not needed for estimation)
     try:
-        model = load_nas_model(GENOME_FILE, device='cpu')
+        model = load_nas_model(config.ACTIVE_GENOME, device='cpu')
         print("model built successfully.")
     except Exception as e:
         print(f"setup failed: {e}")
@@ -39,6 +37,7 @@ def main():
     else:
         print("estimation failed.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

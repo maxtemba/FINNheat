@@ -14,11 +14,13 @@ os.environ.pop("FINN_BUILD_DIR", None)
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
-os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
-os.environ["VITIS_HLS"]     = "/tools/Xilinx/Vitis_HLS/2024.2"
-os.environ["XILINX_VITIS"]  = "/tools/Xilinx/Vitis/2024.2"
-os.environ["VIVADO_PATH"]   = "/tools/Xilinx/Vivado/2024.2"
-os.environ["FINN_RTLLIB"]   = "/home/max/finn-plus/finn-rtllib"
+import config
+
+os.environ["XILINX_VIVADO"] = config.XILINX_VIVADO_PATH
+os.environ["VITIS_HLS"]     = config.VITIS_HLS_PATH
+os.environ["XILINX_VITIS"]  = config.XILINX_VITIS_PATH
+os.environ["VIVADO_PATH"]   = config.XILINX_VIVADO_PATH
+os.environ["FINN_RTLLIB"]   = config.FINN_RTLLIB_PATH
 
 from core.models import NAS_GHM_Model
 from core.hardware import synthesize_performance

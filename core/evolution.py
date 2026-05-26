@@ -14,18 +14,27 @@ SEARCH_SPACE = {
     'parallelism': [2, 3, 4]
 }
 
+
+def _normalize(g):
+    # enc_ch must be ascending, dec_ch descending — invariants relied on elsewhere
+    g['enc_ch'] = sorted(g['enc_ch'])
+    g['dec_ch'] = sorted(g['dec_ch'], reverse=True)
+    return g
+
+
 def random_genome():
     # initialize in the known-valid region: depth=1, bits=4 always pass the hw filter.
     # mutations will still explore depth>1/int8 but those get rejected and don't reproduce.
-    return {
-        'enc_ch':    sorted([random.choice(SEARCH_SPACE['enc_ch']) for _ in range(3)]),
+    return _normalize({
+        'enc_ch':    [random.choice(SEARCH_SPACE['enc_ch']) for _ in range(3)],
         'enc_depth': [random.choice(SEARCH_SPACE['enc_depth']) for _ in range(3)],
         'enc_k':     [random.choice(SEARCH_SPACE['enc_k']) for _ in range(3)],
         'enc_bits':  [random.choice(SEARCH_SPACE['enc_bits']) for _ in range(3)],
         'btl_ch':      random.choice(SEARCH_SPACE['btl_ch']),
-        'dec_ch':      sorted([random.choice(SEARCH_SPACE['dec_ch']) for _ in range(3)], reverse=True),
+        'dec_ch':      [random.choice(SEARCH_SPACE['dec_ch']) for _ in range(3)],
         'parallelism': random.choice(SEARCH_SPACE['parallelism']),
-    }
+    })
+
 
 def mutate(genome):
     """mutates single gene."""
@@ -37,18 +46,14 @@ def mutate(genome):
     else:
         idx = random.randint(0, len(g[key])-1)
         g[key][idx] = random.choice(SEARCH_SPACE[key])
-        if key == 'enc_ch': g[key] = sorted(g[key])
-        if key == 'dec_ch': g[key] = sorted(g[key], reverse=True)
-    return g
+    return _normalize(g)
+
 
 def crossover(g1, g2):
     """uniform crossover."""
-    child = {}
-    for k in g1.keys():
-        child[k] = g1[k] if random.random() > 0.5 else g2[k]
-    child['enc_ch'] = sorted(child['enc_ch'])
-    child['dec_ch'] = sorted(child['dec_ch'], reverse=True)
-    return child
+    child = {k: (g1[k] if random.random() > 0.5 else g2[k]) for k in g1.keys()}
+    return _normalize(child)
+
 
 def calculate_fitness(loss, fps, params_m):
     """fitness = accuracy^2 * efficiency (accuracy-weighted)"""

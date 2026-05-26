@@ -2,3 +2,13 @@
 /finn_build_reports/
 /finn_build_reports_TRAINED/
 /FINN_TMP/
+/builds/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# IDE
+/.idea/
+*.iml

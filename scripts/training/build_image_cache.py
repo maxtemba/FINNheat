@@ -1,23 +1,19 @@
 import os
-import sys
 import numpy as np
 from PIL import Image
 from multiprocessing import Pool
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import config
 from core.dataset import GraspNetHeatmapDataset
 
-# --- settings
-DATA_PATH  = "../data/graspnet"
-CACHE_DIR  = "../data/graspnet_img_cache"
-HW         = (360, 640)
-NUM_WORKERS = 8
+HW = (360, 640)  # cache content shape — must match GraspNetHeatmapDataset.hw
+
 
 def convert_sample(args):
     idx, rgb_path, dep_path = args
 
-    out_r = os.path.join(CACHE_DIR, f"{idx:06d}_r.npy")
-    out_d = os.path.join(CACHE_DIR, f"{idx:06d}_d.npy")
+    out_r = os.path.join(config.IMG_CACHE_DIR, f"{idx:06d}_r.npy")
+    out_d = os.path.join(config.IMG_CACHE_DIR, f"{idx:06d}_d.npy")
     if os.path.exists(out_r) and os.path.exists(out_d):
         return
 
@@ -33,20 +29,22 @@ def convert_sample(args):
         dep = dep.resize((HW[1], HW[0]), Image.NEAREST)
     np.save(out_d, np.array(dep))
 
-def main():
-    os.makedirs(CACHE_DIR, exist_ok=True)
 
-    ds = GraspNetHeatmapDataset(DATA_PATH, camera='kinect', downsample_factor=8)
+def main():
+    os.makedirs(config.IMG_CACHE_DIR, exist_ok=True)
+
+    ds = GraspNetHeatmapDataset(config.DATA_DIR, camera=config.CAMERA, downsample_factor=config.DOWNSAMPLE)
     args = [(i, rgb, dep) for i, (rgb, dep, _) in enumerate(ds.files)]
 
     already = sum(1 for i in range(len(args))
-                  if os.path.exists(os.path.join(CACHE_DIR, f"{i:06d}_r.npy")))
+                  if os.path.exists(os.path.join(config.IMG_CACHE_DIR, f"{i:06d}_r.npy")))
     print(f"converting {len(args) - already} samples ({already} already cached)...")
 
-    with Pool(NUM_WORKERS) as p:
+    with Pool(config.NUM_WORKERS) as p:
         p.map(convert_sample, args)
 
-    print(f"done. cache at '{CACHE_DIR}'")
+    print(f"done. cache at '{config.IMG_CACHE_DIR}'")
+
 
 if __name__ == "__main__":
     main()
