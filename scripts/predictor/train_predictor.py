@@ -15,7 +15,7 @@ SAVE_PATH   = config.predictor_path(PARALLELISM)
 
 
 def main():
-    # 1. load calibration data
+    # load calibration data
     if not os.path.exists(DATA_FILE):
         print(f"calibration data not found at {DATA_FILE}")
         return
@@ -24,7 +24,7 @@ def main():
         data = json.load(f)
 
     all_runs  = data.get("runs", [])
-    # include overflow runs — synth resource data is valid even when implementation fails
+    # include overflow runs, synth resource data is valid even when implementation fails
     ok_runs   = [r for r in all_runs if r["status"] in ("ok", "overflow") and r.get("actual") is not None]
     n_total   = len(all_runs)
     n_ok      = len(ok_runs)
@@ -37,9 +37,9 @@ def main():
         print(f"not enough data to train (need at least 3 ok runs, have {n_ok})")
         return
     if n_ok < 5:
-        print(f"warning: only {n_ok} ok runs — predictor will be unreliable below 20 samples")
+        print(f"warning: only {n_ok} ok runs, predictor will be unreliable below 20 samples")
 
-    # 2. build feature matrix and targets
+    # feature matrix and targets
     X      = np.array([genome_to_features(r["genome"], r["predicted"]) for r in ok_runs])
     y_lut  = np.array([r["actual"]["lut"]  for r in ok_runs])
     y_bram = np.array([r["actual"]["bram"] for r in ok_runs])
@@ -48,9 +48,9 @@ def main():
 
     print(f"\nfeature matrix: {X.shape[0]} samples x {X.shape[1]} features")
 
-    # 3. loocv evaluation
+    # loocv evaluation
     if n_ok < 4:
-        print(f"\nwarning: loocv with n={n_ok} is degenerate — results not statistically meaningful")
+        print(f"\nwarning: loocv with n={n_ok} is degenerate, results not statistically meaningful")
 
     print(f"\nrunning loocv (n={n_ok})...")
     loo = LeaveOneOut()
@@ -88,19 +88,19 @@ def main():
         maxe = np.max(np.abs(p - a))
         print(f"loocv {target:<4}  mae={mae:.1f}  mape={mape:.1f}%  max_err={maxe:.1f}")
 
-    # 4. train final models on all data
+    # train final models on all data
     print(f"\ntraining final models on all {n_ok} samples...")
     rf_lut  = RandomForestRegressor(**rf_params).fit(X, y_lut)
     rf_bram = RandomForestRegressor(**rf_params).fit(X, y_bram)
     rf_dsp  = RandomForestRegressor(**rf_params).fit(X, y_dsp)
 
-    # 5. feature importances
+    # feature importances
     for name, rf in [("lut", rf_lut), ("bram", rf_bram), ("dsp", rf_dsp)]:
         top = sorted(zip(FEATURE_NAMES, rf.feature_importances_), key=lambda x: -x[1])[:5]
         top_str = "  ".join(f"{n}={v:.3f}" for n, v in top)
         print(f"top features ({name}): {top_str}")
 
-    # 6. save
+    # save bundle
     os.makedirs(config.PREDICTORS_DIR, exist_ok=True)
     bundle = {
         "lut":           rf_lut,

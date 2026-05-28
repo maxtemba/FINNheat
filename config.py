@@ -1,11 +1,8 @@
-"""central config for the FINN-Heat pipeline.
-
-paths resolve from the project root so callers don't depend on cwd.
-import the constants you need; do not redefine them in scripts.
-"""
+# central config for the finn-heat pipeline
+# paths resolve from project root so callers don't depend on cwd
+# import what you need, do not redefine constants in scripts
 import os
 
-# --- project root ---
 # config.py lives at the project root
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -14,13 +11,13 @@ def _p(*parts):
     return os.path.join(PROJECT_ROOT, *parts)
 
 
-# --- data ---
+# data
 DATA_DIR      = _p("data", "graspnet")
 IMG_CACHE_DIR = _p("data", "graspnet_img_cache")
 CAMERA        = "kinect"
 DOWNSAMPLE    = 8
 
-# --- artifacts ---
+# artifacts
 GENOMES_DIR    = _p("genomes")
 OUTPUTS_DIR    = _p("scripts", "outputs")
 PREDICTORS_DIR = _p("scripts", "outputs", "predictors")
@@ -35,9 +32,10 @@ ACTIVE_WEIGHTS = _p("scripts", "outputs", "gen33_full_model.pth")
 # nas writes its best genome here
 BEST_NAS_GENOME = _p("genomes", "best_nas_genome.txt")
 
-# live logs (overwritten on each run)
+# live logs, overwritten on each run
 NAS_LOG      = _p("results", "nas_search_log.csv")
 TRAINING_LOG = _p("results", "training_log.csv")
+
 
 # predictor pickles, one per parallelism level
 def predictor_path(parallelism):
@@ -49,35 +47,35 @@ def calibration_data_path(parallelism):
     return os.path.join(OUTPUTS_DIR, f"calibration_data_p{parallelism}.json")
 
 
-# --- hardware target (Kria KV260) ---
+# hardware target (kria kv260)
 TARGET_BOARD    = "KV260_SOM"
 TARGET_FPGA     = "xck26-sfvc784-2LV-c"
-TARGET_CLOCK_NS = 4.44  # ~225 MHz
+TARGET_CLOCK_NS = 4.44  # ~225 mhz
 
 HARDWARE_LIMITS = {
     "LUT":  117120,
-    "BRAM": 288,    # 18K BRAMs
+    "BRAM": 288,    # 18k brams
     "DSP":  1248,
 }
 
-# vivado/vitis paths (used by synthesis scripts; only required when running real synthesis)
+# vivado/vitis paths, only required when running real synthesis
 XILINX_VIVADO_PATH = "/tools/Xilinx/Vivado/2024.2"
 VITIS_HLS_PATH     = "/tools/Xilinx/Vitis_HLS/2024.2"
 XILINX_VITIS_PATH  = "/tools/Xilinx/Vitis/2024.2"
 FINN_RTLLIB_PATH   = "/home/max/finn-plus/finn-rtllib"
 
-# --- nas search ---
+# nas search
 POPULATION_SIZE  = 20
 GENERATIONS      = 60
 ELITISM          = 2
 MUTATION_RATE    = 0.3
 PROXY_EPOCHS     = 10     # epochs per genome during search
 PROXY_BATCHES    = 100    # batches per epoch during search
-SEARCH_SUBSET    = 800    # train images sampled for proxy training
-VAL_SUBSET       = 200    # val images sampled for proxy validation
+SEARCH_SUBSET    = 800    # train images for proxy training
+VAL_SUBSET       = 200    # val images for proxy validation
 SEARCH_BATCH     = 4
 
-# --- full training ---
+# full training
 EPOCHS         = 20
 BATCH_SIZE     = 12
 LEARNING_RATE  = 1e-4
@@ -85,5 +83,5 @@ WEIGHT_DECAY   = 1e-4
 TRAIN_SPLIT    = 0.8
 NUM_WORKERS    = 8
 
-# --- model ---
-NUM_ANGLES = 6  # K anchors for theta classification
+# model
+NUM_ANGLES = 6  # k anchors for theta classification

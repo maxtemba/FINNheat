@@ -1,7 +1,7 @@
 import sys
 import os
 
-# Initialize FINN+ settings before any FINN imports
+# init finn+ settings before any finn imports
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
@@ -18,7 +18,7 @@ from core.models import load_nas_model
 from core.hardware import synthesize_performance
 
 BUILD_NAME       = "synth_best_genome"
-GENERATE_BITFILE = False  # set to True to also run full place-and-route
+GENERATE_BITFILE = False  # set True to also run full place-and-route
 
 
 def main():
@@ -32,7 +32,7 @@ def main():
         return
 
     print(f"running FINN full synthesis (GENERATE_BITFILE={GENERATE_BITFILE})...")
-    print("note: this will take significantly longer than estimation (30-120+ min).\n")
+    print("note: takes significantly longer than estimation (30-120+ min).\n")
 
     metrics = synthesize_performance(model, build_name=BUILD_NAME, generate_bitfile=GENERATE_BITFILE)
 

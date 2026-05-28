@@ -1,6 +1,6 @@
 import numpy as np
 
-# feature names in fixed order — must match genome_to_features() exactly
+# feature names in fixed order, must match genome_to_features() exactly
 FEATURE_NAMES = [
     "enc_ch_0", "enc_ch_1", "enc_ch_2",
     "enc_depth_0", "enc_depth_1", "enc_depth_2",
@@ -13,8 +13,8 @@ FEATURE_NAMES = [
 
 
 def genome_to_features(genome, finn_pred=None):
-    # flattens genome + finn estimates into a fixed-order feature vector (19,)
-    # finn_pred fields default to 0.0 if None (genome-only fallback)
+    # flattens genome + finn estimates into a (19,) feature vector
+    # finn_pred fields default to 0 if None (genome-only fallback)
     p = finn_pred or {}
     return np.array([
         genome["enc_ch"][0],    genome["enc_ch"][1],    genome["enc_ch"][2],
@@ -30,7 +30,7 @@ def genome_to_features(genome, finn_pred=None):
 
 
 def load_predictor(path):
-    # loads saved predictor bundle; returns None on any failure
+    # loads saved predictor bundle, returns None on any failure
     try:
         import joblib
         bundle = joblib.load(path)
@@ -44,8 +44,7 @@ def load_predictor(path):
 
 
 def apply_calibration(predictor, genome, finn_pred=None):
-    # applies calibrated rf prediction to a genome + finn estimates
-    # returns {lut, bram, dsp} or None on error
+    # applies calibrated rf prediction, returns {lut, bram, dsp} or None
     try:
         x = genome_to_features(genome, finn_pred).reshape(1, -1)
         return {

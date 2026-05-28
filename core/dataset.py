@@ -5,28 +5,24 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from PIL import Image
 
-# relative import since they are now siblings in core/
 from .heatmap_generator import HeatmapGenerator
 
 class GraspNetHeatmapDataset(Dataset):
-    """
-    clean pytorch dataset for graspnet.
-    handles file indexing, resizing, and hggd ground truth generation.
-    """
+    # graspnet dataset, handles file indexing, resize, and hggd ground-truth generation
     def __init__(self, root, camera='kinect', downsample_factor=8, img_cache_dir=None):
         self.root = root
         self.camera = camera
         self.factor = downsample_factor
-        self.hw = (360, 640) # target input size (h, w)
+        self.hw = (360, 640)  # target input size (h, w)
         self.img_cache_dir = img_cache_dir
 
-        # physics engine for heatmaps
+        # heatmap generator
         self.generator = HeatmapGenerator(
             full_hw=self.hw, grid_size=self.factor, num_angles=6,
             anchor_w=50.0, anchor_z=20.0, sigma=10
         )
 
-        # build file index once (also populates self.scene_of)
+        # build file index once, also populates self.scene_of
         self.scene_of = []
         self.files = self._build_index()
         print(f"found {len(self.files)} valid pairs for camera '{camera}'")
@@ -37,7 +33,7 @@ class GraspNetHeatmapDataset(Dataset):
     def __getitem__(self, idx):
         rgb_path, depth_path, label_path = self.files[idx]
 
-        # 1. load and resize images (from npy cache if available)
+        # load + resize images, from npy cache if available
         if self.img_cache_dir is not None:
             rgb   = np.load(os.path.join(self.img_cache_dir, f"{idx:06d}_r.npy")).astype(np.float32) / 255.0
             depth = np.load(os.path.join(self.img_cache_dir, f"{idx:06d}_d.npy")).astype(np.float32) / 1000.0
@@ -46,26 +42,26 @@ class GraspNetHeatmapDataset(Dataset):
             rgb, h_old, w_old = self._load_img(rgb_path, is_depth=False)
             depth, _, _       = self._load_img(depth_path, is_depth=True)
 
-        # 2. combine to input tensor [4, H, W]
+        # combine into [4, H, W]
         rgbd = np.concatenate([rgb, depth[..., None]], axis=-1)
         x_in = torch.from_numpy(rgbd).permute(2, 0, 1).float()
 
-        # 3. load and process labels
+        # labels -> grasp list
         grasps = self._process_labels(label_path, depth, h_old, w_old)
 
-        # 4. generate ground truth heatmaps
+        # generate ground-truth heatmaps
         gt_loc, gt_cls, gt_theta, gt_width, gt_depth = \
             self.generator.generate_ground_truth(grasps)
 
-        # 5. downsample localization map (max_pool keeps peaks sharp)
+        # downsample localization map, max_pool keeps peaks sharp
         gt_loc = F.max_pool2d(gt_loc, kernel_size=self.factor, stride=self.factor)
 
         return x_in, (gt_loc, gt_cls, gt_theta, gt_width, gt_depth)
 
-    # --- helper methods ---
+    # helpers
 
     def get_scene_splits(self, train_frac=0.8, seed=42):
-        """splits dataset indices by scene to prevent data leakage between train and val."""
+        # split by scene to prevent data leakage between train and val
         rng = np.random.default_rng(seed)
         scene_arr   = np.array(self.scene_of)
         unique_scenes = np.unique(scene_arr)
@@ -78,14 +74,13 @@ class GraspNetHeatmapDataset(Dataset):
         return train_idx, val_idx
 
     def _build_index(self):
-        """scans directories to match rgb, depth, and label files."""
+        # scan dirs and match rgb, depth, label files per scene
         valid = []
         base_img = os.path.join(self.root, "scenes")
         base_lbl = os.path.join(self.root, f"dataset_{self.camera}")
 
         if not os.path.exists(base_lbl): return []
 
-        # find all scene folders
         scenes = sorted([d for d in os.listdir(base_lbl) if os.path.isdir(os.path.join(base_lbl, d))])
 
         for s_idx, s_id in enumerate(scenes):
@@ -98,7 +93,6 @@ class GraspNetHeatmapDataset(Dataset):
 
             if not os.path.exists(img_dir): continue
 
-            # match files inside the scene
             rgb_dir = os.path.join(img_dir, "rgb")
             dep_dir = os.path.join(img_dir, "depth")
 
@@ -120,7 +114,7 @@ class GraspNetHeatmapDataset(Dataset):
         return valid
 
     def _load_img(self, path, is_depth):
-        """loads image, resizes if needed, and normalizes."""
+        # load, resize if needed, normalize
         img = Image.open(path)
         w_old, h_old = img.size
 
@@ -130,18 +124,17 @@ class GraspNetHeatmapDataset(Dataset):
 
         arr = np.array(img).astype(np.float32)
         if is_depth:
-            return arr / 1000.0, h_old, w_old # mm to meters
+            return arr / 1000.0, h_old, w_old  # mm -> meters
         return arr / 255.0, h_old, w_old
 
     def _process_labels(self, path, depth_map, h_old, w_old):
-        """loads npz, scales coords, and computes depth delta."""
+        # load npz, scale coords, compute depth delta vs surface
         try:
             data = np.load(path)
             centers = data['centers_2d'].astype(np.float32)
             widths  = data['widths_2d'].astype(np.float32)
             z_depth = data['center_z_depths'].astype(np.float32) / 1000.0
 
-            # calculate scale factors
             sy, sx = self.hw[0] / h_old, self.hw[1] / w_old
 
             if sx != 1.0 or sy != 1.0:
@@ -149,7 +142,7 @@ class GraspNetHeatmapDataset(Dataset):
                 centers[:, 1] *= sy
                 widths *= sx
 
-            # calculate depth delta (grasp z - surface z)
+            # depth delta = grasp z - surface z
             uv = centers.astype(int)
             np.clip(uv[:, 0], 0, self.hw[1]-1, out=uv[:, 0])
             np.clip(uv[:, 1], 0, self.hw[0]-1, out=uv[:, 1])
@@ -157,7 +150,7 @@ class GraspNetHeatmapDataset(Dataset):
             surface_z = depth_map[uv[:, 1], uv[:, 0]]
             deltas = z_depth - surface_z
 
-            # return format: [u, v, theta, width, depth_delta]
+            # [u, v, theta, width, depth_delta]
             return np.hstack([
                 centers,
                 data['thetas_rad'][:, None],
@@ -165,5 +158,5 @@ class GraspNetHeatmapDataset(Dataset):
                 deltas[:, None]
             ])
         except:
-            # return empty if file is corrupt
+            # corrupt file -> empty
             return np.zeros((0, 5), dtype=np.float32)

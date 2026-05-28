@@ -10,7 +10,7 @@ OUTPUT_ONNX = os.path.join(config.OUTPUTS_DIR, "model_export.onnx")
 def main():
     print("starting model export...")
 
-    # 1. build model and load weights
+    # build model and load weights
     try:
         model = load_nas_model(config.ACTIVE_GENOME, weights_path=config.ACTIVE_WEIGHTS, device='cpu')
         print("model built and weights loaded successfully.")
@@ -19,7 +19,7 @@ def main():
         print("train genome first!")
         return
 
-    # 2. export
+    # export
     os.makedirs(config.OUTPUTS_DIR, exist_ok=True)
     success = export_to_qonnx(model, OUTPUT_ONNX)
 

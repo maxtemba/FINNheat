@@ -3,13 +3,7 @@ import brevitas.onnx as bo
 
 
 def export_to_qonnx(model, filename):
-    """
-    exports pytorch model as quantized ONNX file uses dummy input for it.
-
-    :param model: pytorch model.
-    :param filename: path to export ONNX file.
-    :return: true/false.
-    """
+    # exports model to qonnx with a dummy 4x360x640 input
     model.eval()
     original_device = next(model.parameters()).device
     model.cpu()

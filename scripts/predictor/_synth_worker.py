@@ -1,16 +1,14 @@
-"""
-standalone synthesis worker - called as a subprocess by collect_calibration_data.py.
-takes genome as json arg, writes result to output json file.
-"""
+# synthesis worker, called as a subprocess by collect_calibration_data.py
+# takes genome as json arg, writes result to output json
 import sys
 import os
 import json
 import ast
 
-# clear stale FINN_BUILD_DIR inherited from parent process before any finn imports
+# clear stale FINN_BUILD_DIR inherited from parent before any finn imports
 os.environ.pop("FINN_BUILD_DIR", None)
 
-# initialize finn settings before any finn imports
+# init finn settings before any finn imports
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 

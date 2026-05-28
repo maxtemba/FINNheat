@@ -1,6 +1,6 @@
 import sys
 
-# Initialize FINN+ settings before any FINN imports
+# init finn+ settings before any finn imports
 from finn.util.settings import initialize_dummy_settings
 initialize_dummy_settings()
 
@@ -12,7 +12,7 @@ from core.models import load_nas_model
 def main():
     print("starting hardware verification for the best genome...")
 
-    # 1. build model (weights not needed for estimation)
+    # build model (weights not needed for estimation)
     try:
         model = load_nas_model(config.ACTIVE_GENOME, device='cpu')
         print("model built successfully.")
@@ -20,7 +20,7 @@ def main():
         print(f"setup failed: {e}")
         return
 
-    # 2. run hardware estimator
+    # run hardware estimator
     print("running FINN estimator...")
 
     metrics = estimate_performance(model, build_name="verify_best_genome")

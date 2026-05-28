@@ -27,8 +27,8 @@ from finn.builder.build_dataflow_steps import (
 
 def _parse_synth_utilization_rpt():
     # reads vivado synthesis utilization report from FINN_TMP when ooc synthesis fails
-    # synthesis (synth_1) always completes even on overflow; only impl_1 (place_design) fails
-    # returns {lut, lut_ram, bram, dsp, overflow=True} or None if report not found
+    # synthesis (synth_1) always completes even on overflow, only impl_1 (place_design) fails
+    # returns {lut, lut_ram, bram, dsp, overflow=True} or None if report missing
     pattern = os.path.join(
         FINN_TMP_DIR, "synth_out_of_context_*",
         "results_finn_design_wrapper", "vivadocompile",
@@ -66,41 +66,29 @@ def _parse_synth_utilization_rpt():
 
 
 def get_folding_factor(channels, limit):
-    """
-    finds optimal folding factor for hardware limit.
-
-    :param channels: number of channels.
-    :param limit: maximum number of allowable parallelism (PE or SIMD).
-    :return: best factor.
-    """
+    # largest divisor of channels that is <= limit
     for i in range(limit, 0, -1):
         if channels % i == 0: return i
     return 1
 
 
 def build_folding_config(mw, config_path, parallelism=2):
-    """
-    builds and saves auto folding config for all MVAU layers.
-
-    :param mw: finn ir model wrapper (post step_convert_to_hw).
-    :param config_path: path to write folding json.
-    :param parallelism: pe and simd target (best divisor <= this value is used per layer).
-    """
+    # write auto folding config for all MVAU layers
+    # pe/simd = best divisor <= parallelism per layer
     folding = {"Defaults": {"ram_style": "auto"}}
     mvau_nodes = [n for n in mw.graph.node if n.op_type.startswith("MVAU")]
 
     for i, node in enumerate(mvau_nodes):
         name = f"MVAU_hls_{i}"
-        w = mw.get_initializer(node.input[1]) # weights
+        w = mw.get_initializer(node.input[1])  # weights
         if w is None: continue
 
-        fan_in       = w.shape[0] # width controls SIMD (memory)
-        out_channels = w.shape[1] # height controls PE (compute)
+        fan_in       = w.shape[0]  # width controls SIMD (memory)
+        out_channels = w.shape[1]  # height controls PE (compute)
 
         pe_target   = parallelism
         simd_target = parallelism
 
-        # parallelism must divide dimensions evenly
         pe   = get_folding_factor(out_channels, pe_target)
         simd = get_folding_factor(fan_in, simd_target)
 
@@ -111,15 +99,14 @@ def build_folding_config(mw, config_path, parallelism=2):
 
 @contextmanager
 def _finn_build_env(build_name, need_vivado=False):
-    # sets up the build dir + env vars finn expects, then cleans up on exit.
-    # need_vivado=True: real synthesis path — creates FINN_TMP, sets FINN_CUSTOM_HLS.
-    # need_vivado=False: estimation only — falls back to a dummy XILINX_VIVADO path.
+    # set up build dir + env vars, clean up on exit
+    # need_vivado=True: real synthesis path, creates FINN_TMP, sets FINN_CUSTOM_HLS
+    # need_vivado=False: estimation only, falls back to a dummy XILINX_VIVADO path
     build_dir = os.path.join(BUILDS_DIR, f"build_{build_name}")
     os.environ['FINN_BUILD_DIR'] = build_dir
     os.makedirs(build_dir, exist_ok=True)
 
     if need_vivado:
-        # finn writes intermediate HLS artifacts under FINN_TMP
         os.makedirs(FINN_TMP_DIR, exist_ok=True)
         # HLS TCL scripts require FINN_CUSTOM_HLS to be set (even if unused)
         os.environ.setdefault('FINN_CUSTOM_HLS', '')
@@ -167,13 +154,7 @@ def _prepare_finn_ir(model, build_dir, parallelism=2):
 
 
 def estimate_performance(model, build_name="finn_eval", parallelism=2):
-    """
-    estimate performance of hardware model using FINN compiler (FPS, LUTs, bRAM).
-
-    :param model: pytorch model.
-    :param build_name: FINN build name.
-    :return: hardware estimate dict or None.
-    """
+    # fast finn estimate: fps, lut, bram, dsp. Returns metric dict or None
     print(f"starting hardware estimation for: {build_name}")
 
     with _finn_build_env(build_name, need_vivado=False) as build_dir:
@@ -221,14 +202,8 @@ def estimate_performance(model, build_name="finn_eval", parallelism=2):
 
 
 def synthesize_performance(model, build_name="finn_synth", generate_bitfile=False, parallelism=2):
-    """
-    run full HLS + OOC synthesis for a model using the FINN compiler.
-
-    :param model: pytorch model.
-    :param build_name: FINN build name.
-    :param generate_bitfile: also run full place-and-route to generate a bitfile.
-    :return: dict with real synthesis metrics, or None on failure.
-    """
+    # full hls + ooc synthesis, returns real synth metrics or None
+    # generate_bitfile=True also runs full place-and-route
     print(f"starting full synthesis for: {build_name}")
 
     with _finn_build_env(build_name, need_vivado=True) as build_dir:
@@ -245,11 +220,11 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
             step_convert_to_hw, step_create_dataflow_partition,
             step_specialize_layers, step_apply_folding_config,
             step_generate_estimate_reports,   # keep estimates for comparison
-            # step_set_fifo_depths omitted: requires RTL sim, not needed for OOC synth
-            step_hw_codegen,                  # generate HLS C++ code for every layer
-            step_hw_ipgen,                    # HLS C-synthesis for every layer
-            step_create_stitched_ip,          # stitch all HLS IPs into one design
-            step_out_of_context_synthesis,    # run Vivado OOC for real resource numbers
+            # step_set_fifo_depths omitted, needs rtl sim and not required for ooc
+            step_hw_codegen,                  # hls c++ codegen per layer
+            step_hw_ipgen,                    # hls c-synthesis per layer
+            step_create_stitched_ip,          # stitch hls ips into one design
+            step_out_of_context_synthesis,    # vivado ooc for real resource numbers
         ]
 
         cfg = DataflowBuildConfig(
@@ -276,8 +251,8 @@ def synthesize_performance(model, build_name="finn_synth", generate_bitfile=Fals
         with open(ooc_path, 'r') as f:
             ooc = json.load(f)
 
-        # ooc json is flat (no "resources"/"timing" nesting)
-        # estimated performance is still from the dataflow model (not affected by OOC)
+        # ooc json is flat, no resources/timing nesting
+        # estimated performance comes from the dataflow model, not affected by ooc
         est_fps = 0
         if os.path.exists(est_p_path):
             with open(est_p_path, 'r') as f:

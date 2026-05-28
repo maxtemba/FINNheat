@@ -20,7 +20,7 @@ def main():
     os.makedirs(config.OUTPUTS_DIR, exist_ok=True)
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
 
-    # 1. build model and load weights
+    # build model
     try:
         model = load_nas_model(config.ACTIVE_GENOME, weights_path=None, device=DEVICE)
         print("model built successfully.")
@@ -28,7 +28,7 @@ def main():
         print(f"setup failed: {e}")
         return
 
-    # 2. load data
+    # load data
     if not os.path.exists(config.DATA_DIR):
         print(f"data not found at {config.DATA_DIR}")
         return
@@ -37,7 +37,7 @@ def main():
         ds = GraspNetHeatmapDataset(config.DATA_DIR, camera=config.CAMERA,
                                     downsample_factor=config.DOWNSAMPLE, img_cache_dir=config.IMG_CACHE_DIR)
 
-        # split by scene to prevent data leakage
+        # scene-based split prevents data leakage
         train_idx, val_idx = ds.get_scene_splits(train_frac=config.TRAIN_SPLIT)
         print(f"train: {len(train_idx)} samples | val: {len(val_idx)} samples")
 
@@ -49,7 +49,7 @@ def main():
         print(f"error loading dataset: {e}")
         return
 
-    # 3. train
+    # train
     optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=1e-6)
 

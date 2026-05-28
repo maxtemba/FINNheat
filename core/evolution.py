@@ -2,8 +2,8 @@ import random
 import copy
 import numpy as np
 
-# --- search space
-# all genes sampled randomly; hw filter rejects genomes that exceed kv260 constraints.
+# search space, all genes sampled uniformly
+# hw filter rejects genomes that exceed kv260 limits
 SEARCH_SPACE = {
     'enc_ch':    [16, 32, 48, 64, 96, 128],
     'enc_depth': [1, 2, 3],
@@ -16,15 +16,15 @@ SEARCH_SPACE = {
 
 
 def _normalize(g):
-    # enc_ch must be ascending, dec_ch descending — invariants relied on elsewhere
+    # enc_ch ascending, dec_ch descending (invariant used downstream)
     g['enc_ch'] = sorted(g['enc_ch'])
     g['dec_ch'] = sorted(g['dec_ch'], reverse=True)
     return g
 
 
 def random_genome():
-    # initialize in the known-valid region: depth=1, bits=4 always pass the hw filter.
-    # mutations will still explore depth>1/int8 but those get rejected and don't reproduce.
+    # depth=1, bits=4 always pass the hw filter
+    # mutations explore depth>1 / int8 but get rejected and don't reproduce
     return _normalize({
         'enc_ch':    [random.choice(SEARCH_SPACE['enc_ch']) for _ in range(3)],
         'enc_depth': [random.choice(SEARCH_SPACE['enc_depth']) for _ in range(3)],
@@ -37,7 +37,7 @@ def random_genome():
 
 
 def mutate(genome):
-    """mutates single gene."""
+    # mutate one random gene
     g = copy.deepcopy(genome)
     key = random.choice(list(SEARCH_SPACE.keys()))
 
@@ -50,13 +50,13 @@ def mutate(genome):
 
 
 def crossover(g1, g2):
-    """uniform crossover."""
+    # uniform crossover
     child = {k: (g1[k] if random.random() > 0.5 else g2[k]) for k in g1.keys()}
     return _normalize(child)
 
 
 def calculate_fitness(loss, fps, params_m):
-    """fitness = accuracy^2 * efficiency (accuracy-weighted)"""
+    # fitness = accuracy^2 * efficiency, accuracy-weighted
     accuracy_score = 1.0 / (loss + 1e-6)
     param_factor = 10.0 / np.log(params_m + 2.0)
     efficiency_score = fps * param_factor

@@ -5,26 +5,17 @@ import torch
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 
-# loss decomposition returned by hggd_loss and aggregated by _run_epoch / _validate
+# loss decomposition returned by hggd_loss
 LossParts = namedtuple('LossParts', ['total', 'loc', 'cls', 'reg'])
 
 
 def hggd_loss(preds, targets, device):
-    """
-    calculates error for the Grasp Heatmap Model (GHM).
-    implements the loss function from the HGGD paper and properly deals with 99% of background.
-
-    :param preds: output from the model (loc, cls, theta, width, depth).
-    :param targets: models ground truth (loc, cls, theta, width, depth).
-    :param device: CPU/GPU.
-    :return: LossParts(total, loc, cls, reg).
-    """
-
+    # hggd loss: penalty-reduced focal loc, focal cls, masked smooth-l1 reg
     pred_loc, pred_cls, pred_theta, pred_width, pred_depth = preds
     gt_loc, gt_cls, gt_theta, gt_width, gt_depth = targets
-    eps = 1e-6 # log(0) errors
+    eps = 1e-6  # avoid log(0)
 
-    # localization loss (penalty-reduced focal loss, gamma=4, pos threshold >= 0.7)
+    # loc: penalty-reduced focal loss, gamma=4, pos threshold >= 0.7
     pred_loc = torch.clamp(torch.sigmoid(pred_loc.float().clamp(-20, 20)), eps, 1 - eps)
     pos_inds = gt_loc.ge(0.7).float()
     neg_inds = gt_loc.lt(0.7).float()
@@ -33,7 +24,7 @@ def hggd_loss(preds, targets, device):
     loss_neg = torch.log(1 - pred_loc) * torch.pow(pred_loc, 4) * neg_weights * neg_inds
     loss_loc = -(loss_pos.sum() + loss_neg.sum()) / (pos_inds.sum() + 1)
 
-    # classification loss (angle anchor focal loss, thres=0.5 alpha=0.25 as in HGGD)
+    # cls: angle anchor focal loss, thres=0.5 alpha=0.25 (hggd)
     pred_cls = torch.clamp(torch.sigmoid(pred_cls.float().clamp(-20, 20)), eps, 1 - eps)
     cls_pos = gt_cls.ge(0.5).float()
     cls_neg = gt_cls.lt(0.5).float()
@@ -41,7 +32,7 @@ def hggd_loss(preds, targets, device):
     loss_cls_neg = 0.75 * torch.log(1 - pred_cls) * torch.pow(pred_cls, 2) * cls_neg
     loss_cls = -(loss_cls_pos.sum() + loss_cls_neg.sum()) / (cls_pos.sum() + 1)
 
-    # regression loss (masked by cls confidence as in HGGD, clamped + averaged over 3 targets)
+    # reg: masked by cls confidence, averaged over theta/width/depth
     cls_mask = cls_pos.expand_as(pred_theta)
     loss_reg = torch.tensor(0.0, device=device)
     if cls_mask.sum() > 0:
@@ -59,7 +50,7 @@ def hggd_loss(preds, targets, device):
 
 
 def _run_epoch(model, loader, optimizer, scaler, device, max_batches=None, print_every=0):
-    """train one epoch; returns mean LossParts (or all-zeros LossParts with total=999 on empty)."""
+    # train one epoch, returns mean LossParts (or all-zero with total=999 on empty)
     model.train()
     use_amp = device.type == 'cuda'
     total = loc = cls = reg = 0.0
@@ -105,7 +96,7 @@ def _run_epoch(model, loader, optimizer, scaler, device, max_batches=None, print
 
 
 def _validate(model, val_loader, device, use_amp):
-    """returns mean LossParts on the validation set."""
+    # mean LossParts on the validation set
     model.eval()
     total = loc = cls = reg = 0.0
     count = 0
@@ -127,6 +118,7 @@ def _validate(model, val_loader, device, use_amp):
 
 
 def _log_csv(log_csv, generation, epoch, train_loss, val_loss):
+    # append one row per epoch, write header on first write
     new_file = not os.path.isfile(log_csv)
     with open(log_csv, mode='a', newline='') as f:
         writer = csv.writer(f)
@@ -138,24 +130,7 @@ def _log_csv(log_csv, generation, epoch, train_loss, val_loss):
 def train_model(model, loader, optimizer, device, epochs=1, save_path=None,
                 max_batches=None, print_every=10, generation=None, log_csv=None,
                 val_loader=None, scheduler=None, heatmap_callback=None):
-    """
-    main training loop that handles both fast NAS proxy training and full training.
-
-    :param model: pytorch model.
-    :param loader: dataloader.
-    :param optimizer: optimizer.
-    :param device: CPU/GPU.
-    :param epochs: number of epochs.
-    :param save_path: (optional) path to save the trained model.
-    :param max_batches: (optional) maximum number of batches per epoch.
-    :param print_every: batch-level print frequency (0 disables).
-    :param generation: (optional) generation number for csv logging.
-    :param log_csv: (optional) path to csv file for per-epoch loss logging.
-    :param val_loader: (optional) validation dataloader.
-    :param scheduler: (optional) lr scheduler stepped after each epoch.
-    :param heatmap_callback: (optional) callable(model, epoch) fired every 5 epochs.
-    :return: best monitored loss (val if available, else train).
-    """
+    # nas proxy and full training loop, returns best monitored loss (val if available else train)
     use_amp = device.type == 'cuda'
     scaler = GradScaler('cuda', enabled=use_amp)
     best_loss = float('inf')
@@ -166,7 +141,7 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None,
         print(f"\ntraining: {epochs} epochs x [{limit_str}]")
 
     for epoch in range(epochs):
-        if epochs > 1: print(f"--- epoch {epoch+1}/{epochs} ---")
+        if epochs > 1: print(f"epoch {epoch+1}/{epochs}")
 
         train = _run_epoch(model, loader, optimizer, scaler, device,
                            max_batches=max_batches, print_every=print_every)
@@ -193,7 +168,7 @@ def train_model(model, loader, optimizer, device, epochs=1, save_path=None,
         if heatmap_callback is not None and (epoch + 1) % 5 == 0:
             heatmap_callback(model, epoch + 1)
 
-        # save on best monitored loss (val if available, else train)
+        # save on best monitored loss
         monitor = val.total if val is not None else train.total
         if monitor < best_loss:
             best_loss = monitor

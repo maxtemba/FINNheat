@@ -6,7 +6,7 @@ from multiprocessing import Pool
 import config
 from core.dataset import GraspNetHeatmapDataset
 
-HW = (360, 640)  # cache content shape — must match GraspNetHeatmapDataset.hw
+HW = (360, 640)  # must match GraspNetHeatmapDataset.hw
 
 
 def convert_sample(args):
@@ -17,13 +17,13 @@ def convert_sample(args):
     if os.path.exists(out_r) and os.path.exists(out_d):
         return
 
-    # rgb: resize to 360x640, save as uint8
+    # rgb: resize, save as uint8
     rgb = Image.open(rgb_path)
     if (rgb.size[1], rgb.size[0]) != HW:
         rgb = rgb.resize((HW[1], HW[0]), Image.BILINEAR)
     np.save(out_r, np.array(rgb))
 
-    # depth: resize to 360x640, save as uint16 (mm, raw)
+    # depth: resize, save as uint16 (mm, raw)
     dep = Image.open(dep_path)
     if (dep.size[1], dep.size[0]) != HW:
         dep = dep.resize((HW[1], HW[0]), Image.NEAREST)

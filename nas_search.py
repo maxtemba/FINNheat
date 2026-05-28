@@ -13,26 +13,26 @@ from core.dataset import GraspNetHeatmapDataset
 from core.evolution import random_genome, mutate, crossover, calculate_fitness
 from core.predictor import load_predictor, apply_calibration
 
-# --- setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
 
-# no explicit hardware margin — calibrated predictor already overpredicts fitting designs
-# by ~5-10%, which acts as an implicit safety buffer without making the search space empty
+# no explicit hardware margin
+# calibrated predictor already overpredicts fitting designs by ~5-10%
+# that acts as an implicit safety buffer without emptying the search space
 hw_predictors = {}
 for _p in [2, 3, 4]:
     _pred = load_predictor(config.predictor_path(_p))
     if _pred:
         hw_predictors[_p] = _pred
 if not hw_predictors:
-    print("no hw predictors found — using raw finn estimates")
+    print("no hw predictors found, using raw finn estimates")
 
 
 def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
     print(f"   Testing Genome {individual_id}...")
 
-    # 1. build model
+    # build model
     try:
         model = NAS_GHM_Model(genome).to(DEVICE)
         params_m = sum(p.numel() for p in model.parameters()) / 1e6
@@ -40,7 +40,7 @@ def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
         print(f"      -> Setup failed: {e}")
         return 0, 0, 999, 0, 0, 0, 0
 
-    # 2. hardware estimation
+    # hardware estimation
     parallelism = genome.get('parallelism', 2)
     build_tag = f"gen{generation}_id{individual_id}"
     hw_metrics = estimate_performance(model, build_name=build_tag, parallelism=parallelism)
@@ -50,7 +50,7 @@ def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
         print(f"      -> Failed to estimate hardware.")
         return 0, 0, 999, params_m, 0, 0, 0
 
-    # filter 2: hardware constraints
+    # filter 2: hardware constraints (with calibration if available)
     hw_predictor = hw_predictors.get(parallelism)
     if hw_predictor:
         cal = apply_calibration(hw_predictor, genome, hw_metrics)
@@ -74,7 +74,7 @@ def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
         print(f"      -> HARDWARE OVERFLOW {hw_label} | LUT: {lut_usage:.0f} (Max {config.HARDWARE_LIMITS['LUT']}) | BRAM: {bram_usage} (Max {config.HARDWARE_LIMITS['BRAM']}) | DSP: {dsp_usage} (Max {config.HARDWARE_LIMITS['DSP']})")
         return 0, hw_metrics['fps'], 999, params_m, lut_usage, bram_usage, dsp_usage
 
-    # 3. proxy train
+    # proxy training
     optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
     loss = train_model(
@@ -89,7 +89,7 @@ def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
         val_loader=val_loader,
     )
 
-    # 4. fitness
+    # fitness
     fps = hw_metrics['fps']
     fitness = calculate_fitness(loss, fps, params_m)
 
@@ -97,7 +97,7 @@ def evaluate_fitness(genome, loader, val_loader, generation, individual_id):
     return fitness, fps, loss, params_m, lut_usage, bram_usage, dsp_usage
 
 
-# --- main loop
+# main loop
 if __name__ == "__main__":
     img_cache = config.IMG_CACHE_DIR if os.path.exists(config.IMG_CACHE_DIR) else None
     full_ds = GraspNetHeatmapDataset(config.DATA_DIR, camera=config.CAMERA,
@@ -151,6 +151,7 @@ if __name__ == "__main__":
         scored_pop.sort(key=lambda x: x[0], reverse=True)
         print(f"   gen {gen+1} top score: {scored_pop[0][0]:.4f}")
 
+        # elitism + breed
         next_gen = [scored_pop[i][1] for i in range(config.ELITISM)]
 
         while len(next_gen) < config.POPULATION_SIZE:
